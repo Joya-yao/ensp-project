@@ -103,6 +103,9 @@ cloud:
 | VRRP | `protocols.vrrp` | `vrrp vrid ... virtual-ip` / `priority` / `preempt-mode` |
 | DHCP | `protocols.dhcp` | `dhcp enable` / `ip pool` / `dhcp select global` |
 | OSPF | `protocols.ospf` | `ospf` / `area` / `network` |
+| ACL | `protocols.acl` | `acl number` / `rule` / `traffic-filter` |
+| 部门标注 | `devices[].department` | 只进文档，如「LSW1（财务部）」 |
+| 层级标注 | `devices[].layer` | 只进文档：核心层 / 汇聚层 / 接入层 |
 
 字段与校验规则的完整定义见 [REQUIREMENTS.md](REQUIREMENTS.md)，二次开发的接口说明见 [docs/API.md](docs/API.md)。
 
@@ -126,9 +129,14 @@ run.py <topo> [选项]
 experiment:
   name: "实验八 综合组网"
 
+departments:
+  finance: {name: 财务部, subnet: 10.0.20.0/24}
+  server:  {name: 服务器区, subnet: 10.0.30.0/24}
+
 devices:
   AR1:
     role: router
+    layer: core
     interfaces:
       - name: GigabitEthernet0/0/0
         ip: 10.0.1.1/24
@@ -136,6 +144,8 @@ devices:
 
   LSW1:
     role: switch
+    department: 财务部
+    layer: access
     vlans:
       - {id: 10, name: student}
     interfaces:
@@ -147,9 +157,20 @@ protocols:
     process: 1
     areas: [{area: 0}]
     auto_networks: true
+
+  acl:
+    - name: finance-guard
+      device: AR1
+      apply: {interface: GigabitEthernet0/0/0, direction: inbound}
+      rules:
+        - {action: permit, source: finance, destination: server}  # 财务可访问服务器
+        - {action: deny, source: any, destination: finance}       # 其他部门不能访问财务
+        - {action: permit, source: any, destination: any}         # 其余放行
 ```
 
-更多样例在 `samples/`：`requirements.yaml`、`requirements-vlan.yaml`、`requirements-mstp.yaml`、`requirements-vrrp.yaml`、`requirements-dhcp.yaml`。
+生成后文档里设备标题会带部门，如「LSW1（财务部）」，设备表还会多出「部门」「层级」两列。这两项只是标注，不进设备命令。
+
+更多样例在 `samples/`：`requirements.yaml`、`requirements-vlan.yaml`、`requirements-mstp.yaml`、`requirements-vrrp.yaml`、`requirements-dhcp.yaml`、`requirements-acl.yaml`。
 
 ## 项目结构
 

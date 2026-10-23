@@ -28,23 +28,34 @@ SYSTEM_PROMPT = """你是网络实验配置助手。把用户的实验要求转�
 
 规则：
 1. 只输出 YAML，不要解释，不要 Markdown 围栏。
-2. 严格用这些顶层键：experiment、devices、protocols。
-3. devices.<设备名> 下可用：role、vlans、interfaces。
-   interfaces 元素可用：name、ip、description、mode（access/trunk）、vlan、allow_vlans、edged_port。
-4. protocols 下可用：ospf、mstp、vrrp、dhcp，结构见用户消息里的字段说明。
-5. IP 一律 CIDR（10.0.1.1/24）。接口名用 GigabitEthernet0/0/0 形式。
-6. VLAN 必须先在该设备 vlans 里定义，接口只能引用已定义 VLAN。
-7. 原文没提到的不要猜；缺信息用 YAML 注释 # TODO: 标出，不要编造。
+2. 严格用这些顶层键：experiment、departments、devices、protocols。
+3. devices.<设备名> 下可用：role、department、layer、vlans、interfaces。
+   - department 是中文部门名（如 财务部），只显示在文档标题里，不进命令。
+   - layer 只能是 core / aggregation / access（核心/汇聚/接入）。
+   - interfaces 元素可用：name、ip、description、mode（access/trunk）、vlan、allow_vlans、edged_port。
+4. departments 下每项：name（中文名）、subnet（该部门网段 CIDR）。
+5. protocols 下可用：ospf、mstp、vrrp、dhcp、acl，结构见用户消息里的字段说明。
+6. IP 一律 CIDR（10.0.1.1/24）。接口名用 GigabitEthernet0/0/0 形式。
+7. VLAN 必须先在该设备 vlans 里定义，接口只能引用已定义 VLAN。
+8. 原文说「A 不能访问 B，但 B 可以访问 C」这类访问控制，必须写成 acl 规则：
+   source/destination 用部门 key 或 any；默认动作用 permit / deny，按顺序匹配。
+9. 原文没提到的不要猜；缺信息用 YAML 注释 # TODO: 标出，不要编造。
 """
 
 FIELD_GUIDE = """字段示例：
+departments:
+  finance: {name: 财务部, subnet: 10.0.20.0/24}
+  server: {name: 服务器区, subnet: 10.0.30.0/24}
 devices:
   AR1:
     role: router
+    layer: core
     interfaces:
       - {name: GigabitEthernet0/0/0, ip: 10.0.1.1/24, description: to-LSW1}
   LSW1:
     role: switch
+    department: 财务部
+    layer: access
     vlans:
       - {id: 10, name: student}
     interfaces:
@@ -64,6 +75,14 @@ protocols:
     pools:
       - {name: vlan10, network: 10.0.1.0/24, gateway: 10.0.1.1, dns: [114.114.114.114]}
     devices: {AR1: {pools: [vlan10], interfaces: [GigabitEthernet0/0/0]}}
+  acl:
+    - name: finance-guard
+      device: AR1
+      apply: {interface: GigabitEthernet0/0/0, direction: inbound}
+      rules:
+        - {action: permit, source: finance, destination: server}
+        - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
 """
 
 

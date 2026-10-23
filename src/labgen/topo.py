@@ -359,11 +359,15 @@ def _print_summary(requirements, path: str | Path) -> None:
         protocols.append("VRRP")
     if requirements.dhcp is not None:
         protocols.append("DHCP")
+    if requirements.acls:
+        protocols.append(f"ACL {len(requirements.acls)} 条")
 
     print(f"要求文件：{Path(path).name}")
     print(f"实验：{requirements.experiment or '（未命名）'}")
     print(f"设备 {len(devices)} 台：" + "、".join(devices))
     print(f"接口 {iface_count} 个，VLAN {vlan_count} 个")
+    if requirements.departments:
+        print("部门：" + "、".join(requirements.departments))
     print("协议：" + ("、".join(protocols) if protocols else "（无）"))
     print("校验通过。")
 

@@ -49,19 +49,30 @@ def _command_block(doc: Document, commands: list[str]) -> None:
         _set_code_font(run)
 
 
-def _device_table(doc: Document, topo: Topology) -> None:
-    table = doc.add_table(rows=1, cols=4)
+LAYER_NAMES = {"core": "核心层", "aggregation": "汇聚层", "access": "接入层"}
+
+
+def _device_table(doc: Document, topo: Topology, req: Requirements) -> None:
+    table = doc.add_table(rows=1, cols=6)
     table.style = "Light Grid Accent 1"
-    for cell, title in zip(table.rows[0].cells, ("设备", "型号", "类型", "可连接口数")):
+    headers = ("设备", "型号", "类型", "部门", "层级", "可连接口数")
+    for cell, title in zip(table.rows[0].cells, headers):
         cell.text = title
     for device in topo.devices:
+        spec = req.devices.get(device.name)
         row = table.add_row().cells
         row[0].text = device.name
         row[1].text = device.model
         row[2].text = {"router": "路由器", "switch": "交换机", "pc": "终端"}.get(
             device.device_type, device.device_type
         )
-        row[3].text = str(len(device.ports))
+        row[3].text = (spec.department if spec and spec.department else "—")
+        row[4].text = (
+            LAYER_NAMES.get(spec.layer, spec.layer)
+            if spec and spec.layer
+            else "—"
+        )
+        row[5].text = str(len(device.ports))
 
 
 def _link_table(doc: Document, topo: Topology) -> None:
@@ -111,7 +122,7 @@ def build_document(
 
     doc.add_heading("拓扑概览", level=1)
     doc.add_heading("设备", level=2)
-    _device_table(doc, topo)
+    _device_table(doc, topo, req)
 
     doc.add_heading("连线", level=2)
     _link_table(doc, topo)
@@ -127,13 +138,20 @@ def build_document(
         if not commands:
             continue
         used.add(device.name)
+        spec = req.devices.get(device.name)
+        dept = spec.department if spec and spec.department else None
+        title_name = f"{device.name}（{dept}）" if dept else device.name
         doc.add_page_break()
-        doc.add_heading(f"{device.name}　{device.model}", level=1)
+        doc.add_heading(f"{title_name}　{device.model}", level=1)
 
-        info = doc.add_paragraph(
+        layer_name = LAYER_NAMES.get(spec.layer, spec.layer) if spec and spec.layer else None
+        info_text = (
             f"类型：{'路由器' if device.device_type == 'router' else '交换机' if device.device_type == 'switch' else '终端'}"
             f"　接口：{len(device.ports)} 个"
         )
+        if layer_name:
+            info_text += f"　层级：{layer_name}"
+        info = doc.add_paragraph(info_text)
         info.runs[0].font.size = Pt(9)
 
         doc.add_paragraph("把下面整段命令复制到该设备：")

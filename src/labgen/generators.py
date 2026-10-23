@@ -15,6 +15,7 @@ from labgen.requirements import (
 from labgen.topo import Device, Topology
 
 __all__ = [
+    "acl_commands",
     "build_configs",
     "dhcp_lines",
     "dhcp_pool_commands",
@@ -80,6 +81,18 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
             for iface in dev_cfg.interfaces:
                 if iface.lower() not in ports:
                     problems.append(f"dhcp：{name} 没有接口 {iface}")
+
+    for acl in req.acls:
+        device = topo.device(acl.device)
+        if device is None:
+            problems.append(f"acl {acl.name} 引用了拓扑中不存在的设备 {acl.device}")
+            continue
+        if acl.interface:
+            ports = {p.name.lower() for p in device.ports}
+            if acl.interface.lower() not in ports:
+                problems.append(
+                    f"acl {acl.name}：{acl.device} 没有接口 {acl.interface}"
+                )
 
     return problems
 
@@ -293,6 +306,51 @@ def _leftover_blocks(mapping: dict[str, list[str]], covered: set[str]) -> list[s
     return out
 
 
+def _acl_address(value: str, req: Requirements) -> tuple[str, str]:
+    """把部门 key 或 CIDR 变成 (网络地址, 反掩码)。"""
+
+    if value in req.departments:
+        value = req.departments[value].subnet or ""
+    network = ipaddress.ip_network(value, strict=False)
+    return str(network.network_address), str(network.hostmask)
+
+
+def acl_commands(
+    device: Device, req: Requirements
+) -> tuple[list[str], dict[str, list[str]]]:
+    """生成该设备上的 ACL 定义，以及「接口 → traffic-filter」映射。"""
+
+    blocks: list[str] = []
+    apply_map: dict[str, list[str]] = {}
+
+    for acl in req.acls:
+        if acl.device != device.name:
+            continue
+
+        blocks.append(f"acl number {acl.acl_number}")
+        step = 5
+        for rule in acl.rules:
+            parts = [f" rule {step}", rule.action, rule.protocol]
+            if rule.source != "any":
+                address, wildcard = _acl_address(rule.source, req)
+                parts.extend(["source", address, wildcard])
+            if rule.destination != "any":
+                address, wildcard = _acl_address(rule.destination, req)
+                parts.extend(["destination", address, wildcard])
+            if rule.destination_port is not None:
+                parts.extend(["destination-port", "eq", str(rule.destination_port)])
+            blocks.append(" ".join(parts))
+            step += 5
+        blocks.append(" quit")
+
+        if acl.interface and acl.direction:
+            apply_map.setdefault(acl.interface.lower(), []).append(
+                f" traffic-filter {acl.direction} acl {acl.acl_number}"
+            )
+
+    return blocks, apply_map
+
+
 def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
     """按拓扑顺序为每台设备生成完整命令块。"""
 
@@ -311,16 +369,19 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
         body.extend(mstp_commands(device, spec, req))
         vrrp = vrrp_lines(device, req)
         dhcp = dhcp_lines(device, req)
+        acl_blocks, acl_apply = acl_commands(device, req)
         extras: dict[str, list[str]] = {}
-        for source in (vrrp, dhcp):
+        for source in (vrrp, dhcp, acl_apply):
             for key, lines in source.items():
                 extras.setdefault(key, []).extend(lines)
         covered = {iface.name.lower() for iface in spec.interfaces}
 
         body.extend(dhcp_pool_commands(device, req))
+        body.extend(acl_blocks)
         body.extend(ip_commands(device, spec, extras))
         body.extend(_leftover_blocks(vrrp, covered))
         body.extend(_leftover_blocks(dhcp, covered))
+        body.extend(_leftover_blocks(acl_apply, covered))
         body.extend(ospf_commands(device, spec, req))
         if len(body) == 1:
             continue  # 只有 sysname，没有实际配置

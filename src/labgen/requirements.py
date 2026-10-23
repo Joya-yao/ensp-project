@@ -66,6 +66,8 @@ class DeviceSpec:
     role: str | None = None
     interfaces: tuple[InterfaceSpec, ...] = ()
     vlans: tuple[VlanSpec, ...] = ()
+    department: str | None = None   # 只用于文档标注，不进命令
+    layer: str | None = None        # core / aggregation / access，只用于文档标注
 
 
 @dataclass(frozen=True)
@@ -162,13 +164,48 @@ class DhcpSpec:
 
 
 @dataclass(frozen=True)
+class Department:
+    """一个部门/区域，用网段描述，供 ACL 引用。"""
+
+    key: str
+    name: str | None = None
+    subnet: str | None = None
+
+
+@dataclass(frozen=True)
+class AclRule:
+    """一条 ACL 规则，源/目的可以写部门 key、网段或 any。"""
+
+    action: str                     # permit / deny
+    source: str = "any"
+    destination: str = "any"
+    protocol: str = "ip"            # ip / tcp / udp / icmp
+    destination_port: int | None = None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AclSpec:
+    """一条完整的 ACL 及其下发位置。"""
+
+    name: str
+    device: str
+    rules: tuple[AclRule, ...] = ()
+    acl_number: int = 0
+    interface: str | None = None
+    direction: str | None = None    # inbound / outbound
+
+
+@dataclass(frozen=True)
 class Requirements:
     experiment: str = ""
     devices: dict[str, DeviceSpec] = field(default_factory=dict)
+    departments: dict[str, Department] = field(default_factory=dict)
     ospf: OspfSpec | None = None
     mstp: MstpSpec | None = None
     vrrp: VrrpSpec | None = None
     dhcp: DhcpSpec | None = None
+    acls: tuple[AclSpec, ...] = ()
 
 
 def _need_mapping(value, where: str) -> dict:
@@ -278,8 +315,21 @@ def _parse_device(name: str, raw) -> DeviceSpec:
                     f"已定义：{sorted(defined) or '无'}"
                 )
 
+    department = raw.get("department")
+    if department is not None and (not isinstance(department, str) or not department.strip()):
+        raise RequirementError(f"{name} 的 department 应该是非空字符串，如 财务部")
+
+    layer = raw.get("layer")
+    if layer is not None and layer not in ("core", "aggregation", "access"):
+        raise RequirementError(f"{name} 的 layer 只能是 core / aggregation / access")
+
     return DeviceSpec(
-        name=name, role=raw.get("role"), interfaces=interfaces, vlans=tuple(vlans)
+        name=name,
+        role=raw.get("role"),
+        interfaces=interfaces,
+        vlans=tuple(vlans),
+        department=department.strip() if department else None,
+        layer=layer,
     )
 
 
@@ -584,6 +634,162 @@ def _parse_dhcp(raw) -> DhcpSpec | None:
     return DhcpSpec(pools=pools, devices=devices)
 
 
+def _parse_departments(raw) -> dict[str, Department]:
+    raw = _need_mapping(raw, "departments")
+    departments: dict[str, Department] = {}
+    for key, item in raw.items():
+        key = str(key)
+        item = _need_mapping(item, f"departments.{key}")
+        name = item.get("name")
+        if name is not None and not isinstance(name, str):
+            raise RequirementError(f"departments.{key}.name 应该是字符串")
+        subnet = item.get("subnet")
+        if subnet is not None:
+            if not isinstance(subnet, str):
+                raise RequirementError(f"departments.{key}.subnet 应该是 CIDR 字符串")
+            try:
+                ipaddress.ip_network(subnet, strict=False)
+            except ValueError as exc:
+                raise RequirementError(
+                    f"departments.{key}.subnet 写法错误：{subnet}"
+                ) from exc
+        departments[key] = Department(key=key, name=name, subnet=subnet)
+    return departments
+
+
+def _resolve_endpoint(
+    value, departments: dict[str, Department], where: str
+) -> str:
+    """把 any / 部门 key / CIDR 统一成可渲染的写法，非法就报错。"""
+
+    if not isinstance(value, str) or not value.strip():
+        raise RequirementError(f"{where} 必须是非空字符串（any、部门名或 CIDR）")
+    value = value.strip().lower()
+    if value == "any":
+        return "any"
+    if value in departments:
+        if not departments[value].subnet:
+            raise RequirementError(
+                f"{where} 引用了部门 {value}，但该部门没有定义 subnet"
+            )
+        return value
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError as exc:
+        known = "、".join(sorted(departments)) or "无"
+        raise RequirementError(
+            f"{where} 的值 {value} 既不是 any，也不是 CIDR，也不是已定义部门（{known}）"
+        ) from exc
+    return value
+
+
+def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RequirementError("protocols.acl 应该是列表")
+
+    acls: list[AclSpec] = []
+    names: set[str] = set()
+    used_numbers: set[tuple[str, int]] = set()
+
+    for index, item in enumerate(raw):
+        item = _need_mapping(item, "protocols.acl 的条目")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError(f"第 {index + 1} 条 acl 缺少 name")
+        name = name.strip()
+        if name in names:
+            raise RequirementError(f"ACL 名称 {name} 重复")
+        names.add(name)
+
+        device = item.get("device")
+        if not isinstance(device, str) or not device.strip():
+            raise RequirementError(f"acl {name} 必须给 device（在哪台设备上配）")
+        device = device.strip()
+
+        number = item.get("acl_number", 3000 + index)
+        if not isinstance(number, int) or not 3000 <= number <= 3999:
+            raise RequirementError(f"acl {name} 的 acl_number 应该是 3000-3999 的整数")
+        if (device.lower(), number) in used_numbers:
+            raise RequirementError(f"设备 {device} 上 ACL 编号 {number} 重复")
+        used_numbers.add((device.lower(), number))
+
+        rules_raw = item.get("rules")
+        if not isinstance(rules_raw, list) or not rules_raw:
+            raise RequirementError(f"acl {name} 必须给非空的 rules 列表")
+        rules: list[AclRule] = []
+        for rule_index, rule_raw in enumerate(rules_raw):
+            rule_raw = _need_mapping(rule_raw, f"acl {name} 的第 {rule_index + 1} 条规则")
+            action = rule_raw.get("action")
+            if action not in ("permit", "deny"):
+                raise RequirementError(
+                    f"acl {name} 第 {rule_index + 1} 条规则的 action 只能是 permit 或 deny"
+                )
+            source = _resolve_endpoint(
+                rule_raw.get("source", "any"), departments, f"acl {name} 的 source"
+            )
+            destination = _resolve_endpoint(
+                rule_raw.get("destination", "any"),
+                departments,
+                f"acl {name} 的 destination",
+            )
+            protocol = rule_raw.get("protocol", "ip")
+            if protocol not in ("ip", "tcp", "udp", "icmp"):
+                raise RequirementError(
+                    f"acl {name} 的 protocol 只能是 ip / tcp / udp / icmp"
+                )
+            port = rule_raw.get("destination_port")
+            if port is not None:
+                if protocol not in ("tcp", "udp"):
+                    raise RequirementError(
+                        f"acl {name} 只有 tcp/udp 规则才能写 destination_port"
+                    )
+                if not isinstance(port, int) or not 1 <= port <= 65535:
+                    raise RequirementError(
+                        f"acl {name} 的 destination_port 应该是 1-65535 的整数"
+                    )
+            description = rule_raw.get("description")
+            if description is not None and not isinstance(description, str):
+                raise RequirementError(f"acl {name} 的 description 应该是字符串")
+            rules.append(
+                AclRule(
+                    action=action,
+                    source=source,
+                    destination=destination,
+                    protocol=protocol,
+                    destination_port=port,
+                    description=description,
+                )
+            )
+
+        apply_raw = item.get("apply")
+        interface = direction = None
+        if apply_raw is not None:
+            apply_raw = _need_mapping(apply_raw, f"acl {name}.apply")
+            interface = apply_raw.get("interface")
+            direction = apply_raw.get("direction")
+            if not isinstance(interface, str) or not interface.strip():
+                raise RequirementError(f"acl {name}.apply.interface 必须填写")
+            if direction not in ("inbound", "outbound"):
+                raise RequirementError(
+                    f"acl {name}.apply.direction 只能是 inbound 或 outbound"
+                )
+            interface = interface.strip()
+
+        acls.append(
+            AclSpec(
+                name=name,
+                device=device,
+                rules=tuple(rules),
+                acl_number=number,
+                interface=interface,
+                direction=direction,
+            )
+        )
+    return tuple(acls)
+
+
 def load_requirements(path: str | Path) -> Requirements:
     """读取 ``requirements.yaml``。"""
 
@@ -602,17 +808,20 @@ def load_requirements(path: str | Path) -> Requirements:
     }
 
     protocols = _need_mapping(raw.get("protocols"), "protocols")
+    departments = _parse_departments(raw.get("departments"))
 
     result = Requirements(
         experiment=str(experiment.get("name", "")),
         devices=devices,
+        departments=departments,
         ospf=_parse_ospf(protocols.get("ospf")),
         mstp=_parse_mstp(protocols.get("mstp")),
         vrrp=_parse_vrrp(protocols.get("vrrp")),
         dhcp=_parse_dhcp(protocols.get("dhcp")),
+        acls=_parse_acls(protocols.get("acl"), departments),
     )
     if not result.devices and not any(
-        (result.ospf, result.mstp, result.vrrp, result.dhcp)
+        (result.ospf, result.mstp, result.vrrp, result.dhcp, result.acls)
     ):
         raise RequirementError("要求文件为空：至少要有 devices 或一段协议配置")
     return result

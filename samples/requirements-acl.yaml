@@ -1,0 +1,52 @@
+experiment:
+  name: "实验九 部门隔离与服务器访问控制"
+  notes: "财务部可以访问服务器区，其他部门不能访问财务部"
+
+departments:
+  finance:
+    name: 财务部
+    subnet: 10.0.20.0/24
+  server:
+    name: 服务器区
+    subnet: 10.0.30.0/24
+
+devices:
+  AR1:
+    role: router
+    layer: core
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    layer: access
+    department: 财务部
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+
+  LSW1:
+    role: switch
+    layer: access
+    department: 财务部
+    vlans:
+      - {id: 10, name: finance}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        mode: access
+        vlan: 10
+
+protocols:
+  acl:
+    - name: finance-guard
+      device: AR1
+      acl_number: 3000
+      apply:
+        interface: GigabitEthernet0/0/0
+        direction: inbound
+      rules:
+        - {action: permit, source: finance, destination: server, description: 财务访问服务器}
+        - {action: deny, source: any, destination: finance, description: 其他部门不能访问财务}
+        - {action: permit, source: any, destination: any, description: 其余流量放行}
