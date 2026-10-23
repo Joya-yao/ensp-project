@@ -1,0 +1,80 @@
+experiment:
+  name: "综合实验：VLAN + MSTP + VRRP + DHCP + OSPF"
+  notes: "对应 samples/teacher-requirements.md 的要求原文，六类配置全覆盖"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-AR1
+        mode: access
+        vlan: 10
+        edged_port: true
+      - name: GigabitEthernet0/0/2
+        description: to-AR2
+        mode: access
+        vlan: 10
+        edged_port: true
+      - name: GigabitEthernet0/0/3
+        description: uplink
+        mode: trunk
+        allow_vlans: [10, 20]
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true
+
+  mstp:
+    region:
+      name: RG-1
+      revision: 1
+    instances:
+      - {instance: 1, vlans: [10]}
+      - {instance: 2, vlans: [20]}
+    devices:
+      LSW1:
+        priorities:
+          1: 4096
+
+  vrrp:
+    groups:
+      - vrid: 1
+        interface: GigabitEthernet0/0/0
+        virtual_ip: 10.0.1.254
+        preempt_delay: 20
+        devices:
+          AR1: {priority: 120}
+          AR2: {priority: 100}
+
+  dhcp:
+    pools:
+      - name: vlan10
+        network: 10.0.1.0/24
+        gateway: 10.0.1.254
+        dns: [114.114.114.114]
+        lease_days: 1
+    devices:
+      AR1:
+        pools: [vlan10]
+        interfaces: [GigabitEthernet0/0/0]

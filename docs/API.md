@@ -116,6 +116,31 @@ req.ospf / req.mstp / req.vrrp / req.dhcp   # 各自为 None 或配置对象
 
 ---
 
+## labgen.ai
+
+### `load_ai_config(path) -> AiConfig`
+
+读取 `ai.yaml`，校验 `provider`（`local` / `cloud`）、`base_url`、`model`。云端缺 `api_key` 时回退到环境变量 `AI_API_KEY`。
+
+### `AiConfig`
+
+字段：`provider`、`base_url`、`model`、`api_key`、`timeout`、`temperature`。
+属性 `endpoint` 返回 `{base_url}/chat/completions`。
+
+### `chat(config, requirement_text) -> str`
+
+发一次 `/chat/completions` 请求，返回模型输出的原文。HTTP 错误统一包成 `AiError`。
+
+### `convert_requirements(config, requirement_text) -> str`
+
+`chat` + 去掉模型可能加的 Markdown 围栏，返回可写入文件的 YAML 文本（未校验）。
+
+### `strip_code_fence(text) -> str`
+
+去掉 ```` ```yaml ```` 这类围栏，纯函数。
+
+---
+
 ## labgen.docx_writer
 
 ### `build_document(topo, req, configs) -> Document`

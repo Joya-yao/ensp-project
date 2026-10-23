@@ -39,7 +39,47 @@ C:\Python310\python.exe -m venv .venv
 | `.topo` | eNSP 里连好线，File → Save As |
 | `requirements.yaml` | 人工写，或把老师的要求交给 AI 按 [提示词模板](docs/prompts/requirements-to-yaml.md) 转换 |
 
-运行时不调用 AI，只读 YAML，所以结果可复现、可测试。
+运行时不调用 AI，只读 YAML，所以结果可复现、可测试。AI 只在上面的转换步骤里用一次，且是可选步骤。
+
+## AI 接入（可选）
+
+复制配置模板，按你要用本地还是云端填：
+
+```powershell
+Copy-Item ai.example.yaml ai.yaml
+```
+
+`ai.yaml` 已在 `.gitignore` 里，不会被提交。
+
+**本地模型**（Ollama、LM Studio 等任何 OpenAI 兼容端点）：
+
+```yaml
+provider: local
+local:
+  base_url: http://127.0.0.1:11434/v1
+  model: qwen2.5:7b
+```
+
+**云端模型**（任意 OpenAI 兼容服务）：
+
+```yaml
+provider: cloud
+cloud:
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api_key: "sk-你的key"        # 或设环境变量 AI_API_KEY
+```
+
+然后一条命令把要求原文转成 YAML，并自动跑校验：
+
+```powershell
+.\.venv\Scripts\python.exe run.py `
+  --ai-input samples\teacher-requirements.md `
+  --ai-config ai.yaml `
+  --ai-out samples\generated.yaml
+```
+
+生成后如果校验不过，命令会打印具体哪个字段错了；改完再跑 `--validate` 复查。
 
 ## 支持的配置
 
@@ -107,6 +147,7 @@ protocols:
 src/labgen/
   topo.py            .topo 解析：设备、接口、连线；接口序号 → 接口名
   requirements.py    YAML 读取与校验：字段类型、引用关系、取值范围
+  ai.py              AI 接入：本地/云端 OpenAI 兼容端点，要求原文 → YAML
   generators.py      命令生成：每类配置一个纯函数，按设备聚合
   docx_writer.py     Word 输出：按设备分节、等宽命令块
   __main__.py        入口
