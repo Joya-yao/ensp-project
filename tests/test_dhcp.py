@@ -13,16 +13,10 @@ from labgen.requirements import (
     Requirements,
     load_requirements,
 )
-from labgen.topo import parse_topo
+from labgen.topo import parse_topo  # noqa: F401  (conftest 里生成拓扑)
 
 ROOT = Path(__file__).resolve().parents[1]
-TOPO = ROOT / "samples" / "lab.topo"
 REQ = ROOT / "samples" / "requirements-dhcp.yaml"
-
-
-@pytest.fixture(scope="module")
-def topo():
-    return parse_topo(TOPO)
 
 
 @pytest.fixture(scope="module")

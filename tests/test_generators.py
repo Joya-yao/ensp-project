@@ -4,16 +4,9 @@ import pytest
 
 from labgen.generators import build_configs
 from labgen.requirements import RequirementError, load_requirements
-from labgen.topo import parse_topo
 
 ROOT = Path(__file__).resolve().parents[1]
-TOPO = ROOT / "samples" / "lab.topo"
 REQ = ROOT / "samples" / "requirements.yaml"
-
-
-@pytest.fixture(scope="module")
-def topo():
-    return parse_topo(TOPO)
 
 
 @pytest.fixture(scope="module")

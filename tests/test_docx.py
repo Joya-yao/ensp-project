@@ -5,16 +5,13 @@ import pytest
 from labgen.docx_writer import build_document, write_docx
 from labgen.generators import build_configs
 from labgen.requirements import load_requirements
-from labgen.topo import parse_topo
 
 ROOT = Path(__file__).resolve().parents[1]
-TOPO = ROOT / "samples" / "lab.topo"
 REQ = ROOT / "samples" / "requirements.yaml"
 
 
 @pytest.fixture(scope="module")
-def built():
-    topo = parse_topo(TOPO)
+def built(topo):
     req = load_requirements(REQ)
     return topo, req, build_configs(topo, req)
 

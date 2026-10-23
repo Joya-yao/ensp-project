@@ -63,7 +63,7 @@
 - 运行时**不调用 AI**，只读 YAML。这样结果可复现、可测试。
 - AI 负责把 Word 原文转成 YAML；输出允许人工修正。
 - 提示词模板：`docs/prompts/requirements-to-yaml.md`，含字段表、约束和常见坑。
-- 示例原文：`samples/teacher-requirements.md`。
+- 示例原文：把老师给的要求存成 `.md` / `.txt` 即可，仓库里不放真实实验文档。
 - 转换后先跑 `run.py --validate --req 文件.yaml` 做预检，再生成。
 
 ### M5 文档输出

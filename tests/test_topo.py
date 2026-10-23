@@ -1,15 +1,6 @@
-from pathlib import Path
-
 import pytest
 
 from labgen.topo import TopoError, load_topo, parse_topo
-
-SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "lab.topo"
-
-
-@pytest.fixture(scope="module")
-def topo():
-    return parse_topo(SAMPLE)
 
 
 def test_reads_all_devices(topo):
@@ -55,15 +46,15 @@ def test_links_of(topo):
     assert len(topo.links_of("AR1")) == 1
 
 
-def test_to_dict_is_serializable(topo):
-    data = load_topo(SAMPLE)
+def test_to_dict_is_serializable(topo_path):
+    data = load_topo(topo_path)
     assert data["devices"][0]["ports"][0] == "GigabitEthernet0/0/0"
     assert data["links"][0]["src"]["device"] == "LSW1"
 
 
-def test_missing_file_raises():
+def test_missing_file_raises(topo_path):
     with pytest.raises(FileNotFoundError):
-        parse_topo(SAMPLE.with_name("nope.topo"))
+        parse_topo(topo_path.with_name("nope.topo"))
 
 
 def test_bad_root_raises(tmp_path):

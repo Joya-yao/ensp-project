@@ -88,7 +88,7 @@ protocols:
 2. 看输出的设备数、接口数、协议列表，和原文对一遍。
 3. 再跑一次生成，检查 Word 里的命令：
 ```
-.\.venv\Scripts\python.exe run.py samples\lab.topo --req 你的.yaml --out output\配置.docx
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --req 你的.yaml --out output\配置.docx
 ```
 
 ## 已知的坑

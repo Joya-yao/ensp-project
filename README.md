@@ -36,8 +36,8 @@ C:\Python310\python.exe -m venv .venv
 # 2. 校验要求文件
 .\.venv\Scripts\python.exe run.py --validate --req samples\requirements-dhcp.yaml
 
-# 3. 生成 Word
-.\.venv\Scripts\python.exe run.py samples\lab.topo --req samples\requirements-dhcp.yaml --out output\配置文档.docx
+# 3. 生成 Word（把 你的拓扑.topo 换成你从 eNSP 保存的文件）
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --req samples\requirements-dhcp.yaml --out output\配置文档.docx
 ```
 
 只想看命令、不要 Word，去掉 `--out` 即可直接打印。
@@ -84,7 +84,7 @@ cloud:
 
 ```powershell
 .\.venv\Scripts\python.exe run.py `
-  --ai-input samples\teacher-requirements.md `
+  --ai-input 你的要求.md `
   --ai-config ai.yaml `
   --ai-out samples\generated.yaml
 ```

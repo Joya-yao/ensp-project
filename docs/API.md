@@ -21,7 +21,7 @@ from labgen.docx_writer import write_docx
 - 抛 `TopoError`：解码失败、XML 损坏、根节点不是 `<topo>`
 
 ```python
-topo = parse_topo("samples/lab.topo")
+topo = parse_topo("你的拓扑.topo")
 topo.devices          # list[Device]，按设备名排序
 topo.links            # list[Link]，按端点排序
 topo.warnings         # list[str]，越界等非致命问题

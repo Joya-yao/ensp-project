@@ -8,13 +8,7 @@ from labgen.requirements import RequirementError, load_requirements
 from labgen.topo import parse_topo
 
 ROOT = Path(__file__).resolve().parents[1]
-TOPO = ROOT / "samples" / "lab.topo"
 REQ = ROOT / "samples" / "requirements-vrrp.yaml"
-
-
-@pytest.fixture(scope="module")
-def topo():
-    return parse_topo(TOPO)
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +61,7 @@ def test_non_member_has_no_vrrp(topo, req):
     assert "vrrp" not in text
 
 
-def test_preempt_disabled():
+def test_preempt_disabled(topo):
     requirements = load_yaml(
         """
 devices:
@@ -85,7 +79,6 @@ protocols:
           AR1: {priority: 150}
 """
     )
-    topo = parse_topo(TOPO)
     text = "\n".join(build_configs(topo, requirements)["AR1"])
     assert " vrrp vrid 2 preempt-mode disable" in text
     assert "timer delay" not in text

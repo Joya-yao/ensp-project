@@ -1,6 +1,6 @@
 experiment:
   name: "综合实验：VLAN + MSTP + VRRP + DHCP + OSPF"
-  notes: "对应 samples/teacher-requirements.md 的要求原文，六类配置全覆盖"
+  notes: "综合示例：六类配置全覆盖，可直接对照生成文档"
 
 devices:
   AR1:
