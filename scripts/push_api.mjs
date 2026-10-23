@@ -1,12 +1,12 @@
 // 备用推送：当 github.com:443 不通、但 api.github.com 可用时，
 // 用 Git Data API 把本地文件写成一次提交并更新 main。
 //
-// 用法：MS GITHUB_TOKEN=... node scripts/push_api.mjs "<commit message>" <file...>
+// 用法：GITHUB_TOKEN=... GITHUB_REPO=owner/repo node scripts/push_api.mjs "<commit message>" <file...>
 import fs from "node:fs/promises";
 
 const [, , message, ...files] = process.argv;
 if (!message || files.length === 0) {
-  console.error('usage: node push_api.mjs "<message>" <file...>');
+  console.error('usage: GITHUB_REPO=owner/repo node push_api.mjs "<message>" <file...>');
   process.exit(2);
 }
 
@@ -16,7 +16,11 @@ if (!token) {
   process.exit(2);
 }
 
-const repo = process.env.GITHUB_REPO || "Joya-yao/ensp-project";
+const repo = process.env.GITHUB_REPO;
+if (!repo || !repo.includes("/")) {
+  console.error("GITHUB_REPO missing (expected owner/repo)");
+  process.exit(2);
+}
 const base = "https://api.github.com";
 
 async function api(path, init = {}) {
