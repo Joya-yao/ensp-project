@@ -12,6 +12,9 @@ dependencies = ["PyYAML>=6.0", "python-docx>=1.1"]
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[project.scripts]
+labgen = "labgen.topo:_main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
