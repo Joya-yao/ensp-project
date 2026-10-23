@@ -16,11 +16,12 @@ from labgen.topo import Device, Topology
 
 __all__ = [
     "build_configs",
+    "dhcp_lines",
+    "dhcp_pool_commands",
     "ip_commands",
     "mstp_commands",
     "ospf_commands",
     "vlan_commands",
-    "vrrp_commands",
     "vrrp_lines",
     "check_specs",
 ]
@@ -68,6 +69,17 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
                     problems.append(
                         f"vrrp vrid {group.vrid}：{name} 没有接口 {group.interface}"
                     )
+
+    if req.dhcp is not None:
+        for name, dev_cfg in req.dhcp.devices.items():
+            device = topo.device(name)
+            if device is None:
+                problems.append(f"dhcp 配置里引用了拓扑中不存在的设备 {name}")
+                continue
+            ports = {p.name.lower() for p in device.ports}
+            for iface in dev_cfg.interfaces:
+                if iface.lower() not in ports:
+                    problems.append(f"dhcp：{name} 没有接口 {iface}")
 
     return problems
 
@@ -230,12 +242,49 @@ def vrrp_lines(device: Device, req: Requirements) -> dict[str, list[str]]:
     return per_interface
 
 
-def vrrp_commands(device: Device, req: Requirements, covered: set[str] | None = None) -> list[str]:
-    """只输出接口清单里没写到的 VRRP 接口块，避免重复进入同一接口视图。"""
+def dhcp_lines(device: Device, req: Requirements) -> dict[str, list[str]]:
+    """接口下的 DHCP 命令行，键为接口名小写。"""
 
-    covered = covered or set()
+    cfg = req.dhcp
+    if cfg is None:
+        return {}
+    dev_cfg = cfg.devices.get(device.name)
+    if dev_cfg is None:
+        return {}
+    return {iface.lower(): [" dhcp select global"] for iface in dev_cfg.interfaces}
+
+
+def dhcp_pool_commands(device: Device, req: Requirements) -> list[str]:
+    """DHCP 使能与全局地址池。"""
+
+    cfg = req.dhcp
+    if cfg is None:
+        return []
+    dev_cfg = cfg.devices.get(device.name)
+    if dev_cfg is None or not (dev_cfg.pools or dev_cfg.interfaces):
+        return []
+
+    lines = ["dhcp enable"]
+    for pool_name in dev_cfg.pools:
+        pool = cfg.pools[pool_name]
+        net = ipaddress.ip_network(pool.network, strict=False)
+        lines.append(f"ip pool {pool.name}")
+        lines.append(f" network {net.network_address} mask {net.netmask}")
+        if pool.gateway:
+            lines.append(f" gateway-list {pool.gateway}")
+        if pool.dns:
+            lines.append(" dns-list " + " ".join(pool.dns))
+        if pool.lease_days:
+            lines.append(f" lease day {pool.lease_days}")
+        lines.append(" quit")
+    return lines
+
+
+def _leftover_blocks(mapping: dict[str, list[str]], covered: set[str]) -> list[str]:
+    """把没写进设备接口清单的接口块补出来。"""
+
     out: list[str] = []
-    for interface, lines in vrrp_lines(device, req).items():
+    for interface, lines in mapping.items():
         if interface in covered:
             continue
         out.append(f"interface {interface}")
@@ -261,9 +310,17 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
         body.extend(vlan_commands(device, spec))
         body.extend(mstp_commands(device, spec, req))
         vrrp = vrrp_lines(device, req)
+        dhcp = dhcp_lines(device, req)
+        extras: dict[str, list[str]] = {}
+        for source in (vrrp, dhcp):
+            for key, lines in source.items():
+                extras.setdefault(key, []).extend(lines)
         covered = {iface.name.lower() for iface in spec.interfaces}
-        body.extend(ip_commands(device, spec, vrrp))
-        body.extend(vrrp_commands(device, req, covered))
+
+        body.extend(dhcp_pool_commands(device, req))
+        body.extend(ip_commands(device, spec, extras))
+        body.extend(_leftover_blocks(vrrp, covered))
+        body.extend(_leftover_blocks(dhcp, covered))
         body.extend(ospf_commands(device, spec, req))
         if len(body) == 1:
             continue  # 只有 sysname，没有实际配置

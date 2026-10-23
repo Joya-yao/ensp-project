@@ -137,12 +137,38 @@ class VrrpSpec:
 
 
 @dataclass(frozen=True)
+class DhcpPool:
+    """一个全局地址池。"""
+
+    name: str
+    network: str
+    gateway: str | None = None
+    dns: tuple[str, ...] = ()
+    lease_days: int | None = None
+
+
+@dataclass(frozen=True)
+class DhcpDevice:
+    """一台设备要建的地址池与要开 DHCP 的接口。"""
+
+    pools: tuple[str, ...] = ()
+    interfaces: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DhcpSpec:
+    pools: dict[str, DhcpPool] = field(default_factory=dict)
+    devices: dict[str, DhcpDevice] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Requirements:
     experiment: str = ""
     devices: dict[str, DeviceSpec] = field(default_factory=dict)
     ospf: OspfSpec | None = None
     mstp: MstpSpec | None = None
     vrrp: VrrpSpec | None = None
+    dhcp: DhcpSpec | None = None
 
 
 def _need_mapping(value, where: str) -> dict:
@@ -465,6 +491,99 @@ def _parse_delay(value, vrid: int) -> int:
     return value
 
 
+def _parse_dhcp(raw) -> DhcpSpec | None:
+    if raw is None:
+        return None
+    raw = _need_mapping(raw, "protocols.dhcp")
+
+    pools_raw = raw.get("pools") or []
+    if not isinstance(pools_raw, list):
+        raise RequirementError("dhcp.pools 应该是列表")
+    pools: dict[str, DhcpPool] = {}
+    for item in pools_raw:
+        item = _need_mapping(item, "dhcp.pools 的条目")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError("dhcp.pools 的每个地址池必须有 name")
+        name = name.strip()
+        if name in pools:
+            raise RequirementError(f"DHCP 地址池 {name} 重复定义")
+
+        network = item.get("network")
+        if not isinstance(network, str):
+            raise RequirementError(f"DHCP 地址池 {name} 必须给 network（CIDR，如 10.0.1.0/24）")
+        try:
+            net = ipaddress.ip_network(network, strict=False)
+        except ValueError as exc:
+            raise RequirementError(f"DHCP 地址池 {name} 的 network 写法错误：{network}") from exc
+
+        gateway = item.get("gateway")
+        if gateway is not None:
+            if not isinstance(gateway, str):
+                raise RequirementError(f"DHCP 地址池 {name} 的 gateway 应该是字符串")
+            try:
+                gw = ipaddress.IPv4Address(gateway)
+            except ValueError as exc:
+                raise RequirementError(f"DHCP 地址池 {name} 的 gateway 不是合法 IPv4：{gateway}") from exc
+            if gw not in net:
+                raise RequirementError(
+                    f"DHCP 地址池 {name} 的 gateway {gateway} 不在网段 {net} 内"
+                )
+
+        dns_raw = item.get("dns") or []
+        if not isinstance(dns_raw, list):
+            raise RequirementError(f"DHCP 地址池 {name} 的 dns 应该是列表")
+        dns: list[str] = []
+        for entry in dns_raw:
+            if not isinstance(entry, str):
+                raise RequirementError(f"DHCP 地址池 {name} 的 dns 里有非字符串：{entry!r}")
+            try:
+                ipaddress.IPv4Address(entry)
+            except ValueError as exc:
+                raise RequirementError(
+                    f"DHCP 地址池 {name} 的 dns 不是合法 IPv4：{entry}"
+                ) from exc
+            dns.append(entry)
+
+        lease = item.get("lease_days")
+        if lease is not None and (not isinstance(lease, int) or not 1 <= lease <= 999):
+            raise RequirementError(f"DHCP 地址池 {name} 的 lease_days 应该是 1-999 的整数")
+
+        pools[name] = DhcpPool(
+            name=name,
+            network=network,
+            gateway=gateway,
+            dns=tuple(dns),
+            lease_days=lease,
+        )
+
+    devices_raw = raw.get("devices") or {}
+    if not isinstance(devices_raw, dict):
+        raise RequirementError("dhcp.devices 应该是键值对（设备名 → 参数）")
+    devices: dict[str, DhcpDevice] = {}
+    for dev_name, dev_raw in devices_raw.items():
+        dev_raw = _need_mapping(dev_raw, f"dhcp.devices.{dev_name}")
+        pool_names = dev_raw.get("pools") or []
+        if not isinstance(pool_names, list):
+            raise RequirementError(f"dhcp.devices.{dev_name}.pools 应该是列表")
+        for pool_name in pool_names:
+            if pool_name not in pools:
+                raise RequirementError(
+                    f"dhcp.devices.{dev_name} 引用了未定义的地址池 {pool_name}；"
+                    f"已定义：{sorted(pools) or '无'}"
+                )
+        ifaces = dev_raw.get("interfaces") or []
+        if not isinstance(ifaces, list) or any(not isinstance(i, str) for i in ifaces):
+            raise RequirementError(f"dhcp.devices.{dev_name}.interfaces 应该是接口名列表")
+        devices[str(dev_name)] = DhcpDevice(
+            pools=tuple(pool_names), interfaces=tuple(ifaces)
+        )
+
+    if not pools and not devices:
+        raise RequirementError("dhcp 配置为空：至少要给 pools 或 devices")
+    return DhcpSpec(pools=pools, devices=devices)
+
+
 def load_requirements(path: str | Path) -> Requirements:
     """读取 ``requirements.yaml``。"""
 
@@ -490,4 +609,5 @@ def load_requirements(path: str | Path) -> Requirements:
         ospf=_parse_ospf(protocols.get("ospf")),
         mstp=_parse_mstp(protocols.get("mstp")),
         vrrp=_parse_vrrp(protocols.get("vrrp")),
+        dhcp=_parse_dhcp(protocols.get("dhcp")),
     )

@@ -1,0 +1,43 @@
+experiment:
+  name: "实验七 DHCP 全局地址池"
+  notes: "AR1 作为 DHCP 服务器，为 10.0.1.0/24 下发地址"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    vlans:
+      - {id: 10, name: student}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        mode: access
+        vlan: 10
+
+protocols:
+  dhcp:
+    pools:
+      - name: vlan10
+        network: 10.0.1.0/24
+        gateway: 10.0.1.1
+        dns: [114.114.114.114]
+        lease_days: 1
+    devices:
+      AR1:
+        pools: [vlan10]
+        interfaces: [GigabitEthernet0/0/0]
