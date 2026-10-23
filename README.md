@@ -1,5 +1,7 @@
 # eNSP 配置生成器
 
+[![CI](https://github.com/Joya-yao/ensp-project/actions/workflows/ci.yml/badge.svg)](https://github.com/Joya-yao/ensp-project/actions/workflows/ci.yml)
+
 读 eNSP 工程文件和结构化的实验要求，输出每台设备可整段粘贴的 VRP 配置命令（Word 文档）。
 
 不用手写命令，也不用一个个设备点开抄。拓扑解析是确定性的：同一个输入，两次生成的命令逐字节相同。
