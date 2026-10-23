@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -312,6 +313,15 @@ def _parse_device(name: str, raw) -> DeviceSpec:
             if vid not in defined:
                 raise RequirementError(
                     f"{name}/{iface.name} 引用了未定义的 VLAN {vid}；"
+                    f"已定义：{sorted(defined) or '无'}"
+                )
+
+        match = re.match(r"^vlanif(\d+)$", iface.name.strip(), re.IGNORECASE)
+        if match:
+            vid = int(match.group(1))
+            if vid not in defined:
+                raise RequirementError(
+                    f"{name}/{iface.name} 需要先在 vlans 里定义 VLAN {vid}；"
                     f"已定义：{sorted(defined) or '无'}"
                 )
 
