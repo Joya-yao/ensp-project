@@ -21,6 +21,7 @@ __all__ = [
     "dhcp_lines",
     "dhcp_pool_commands",
     "ip_commands",
+    "link_aggregation_commands",
     "mstp_commands",
     "ospf_commands",
     "vlan_commands",
@@ -120,11 +121,47 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
                 f"acl {acl.name}：{acl.device} 没有可用接口 {acl.interface}"
             )
 
+    for name, spec in req.devices.items():
+        device = topo.device(name)
+        if device is None:
+            continue
+        ports = {p.name.lower() for p in device.ports}
+        for lag in spec.link_aggregations:
+            for member in lag.members:
+                if member.lower() not in ports:
+                    problems.append(
+                        f"{name} 的聚合组 {lag.id} 成员口 {member} 不在拓扑里"
+                    )
+
     return problems
 
 
 def _spec_for(name: str, req: Requirements) -> DeviceSpec | None:
     return req.devices.get(name)
+
+
+def link_aggregation_commands(device: Device, spec: DeviceSpec) -> list[str]:
+    """Eth-Trunk 聚合组：创建接口、模式、二层属性、成员口加入。"""
+
+    lines: list[str] = []
+    for lag in spec.link_aggregations:
+        lines.append(f"interface Eth-Trunk{lag.id}")
+        if lag.mode == "lacp":
+            lines.append(" mode lacp")
+        if lag.port_mode == "access":
+            lines.append(" port link-type access")
+            lines.append(f" port default vlan {lag.vlan}")
+        elif lag.port_mode == "trunk":
+            allowed = " ".join(str(v) for v in lag.allow_vlans)
+            lines.append(" port link-type trunk")
+            lines.append(f" port trunk allow-pass vlan {allowed}")
+        lines.append(" quit")
+
+        for member in lag.members:
+            lines.append(f"interface {member}")
+            lines.append(f" eth-trunk {lag.id}")
+            lines.append(" quit")
+    return lines
 
 
 def vlan_commands(device: Device, spec: DeviceSpec) -> list[str]:
@@ -392,6 +429,7 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
 
         body: list[str] = [f"sysname {device.name}"]
         body.extend(vlan_commands(device, spec))
+        body.extend(link_aggregation_commands(device, spec))
         body.extend(mstp_commands(device, spec, req))
         vrrp = vrrp_lines(device, req)
         dhcp = dhcp_lines(device, req)
