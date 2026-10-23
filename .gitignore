@@ -6,3 +6,5 @@ pytest-cache-files-*/
 pytest-of-*/
 .idea/
 output/
+samples/*/
+tools/

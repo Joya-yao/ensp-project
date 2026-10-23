@@ -286,6 +286,8 @@ def parse_topo(path: str | Path) -> Topology:
         )
 
     by_id = {d.id: d for d in devices}
+    # eNSP 保存时会重排设备顺序，按名字排序保证输出稳定
+    devices.sort(key=lambda d: d.name)
     links: list[Link] = []
     warnings: list[str] = []
 
@@ -318,6 +320,9 @@ def parse_topo(path: str | Path) -> Topology:
                 cable=pair.get("lineName", ""),
             )
         )
+
+    # 连线顺序同样按端点排序，避免 eNSP 重排导致输出漂移
+    links.sort(key=lambda l: (l.src.device, l.src.port or "", l.dst.device, l.dst.port or ""))
 
     return Topology(
         version=root.get("version", "unknown"),
