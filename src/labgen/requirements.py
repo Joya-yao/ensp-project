@@ -113,11 +113,36 @@ class MstpSpec:
 
 
 @dataclass(frozen=True)
+class VrrpDevice:
+    """一台设备在 VRRP 备份组里的角色。"""
+
+    priority: int = 100
+
+
+@dataclass(frozen=True)
+class VrrpGroup:
+    """一个 VRRP 备份组。"""
+
+    vrid: int
+    interface: str
+    virtual_ip: str
+    devices: dict[str, VrrpDevice] = field(default_factory=dict)
+    preempt: bool = True
+    preempt_delay: int = 0
+
+
+@dataclass(frozen=True)
+class VrrpSpec:
+    groups: tuple[VrrpGroup, ...] = ()
+
+
+@dataclass(frozen=True)
 class Requirements:
     experiment: str = ""
     devices: dict[str, DeviceSpec] = field(default_factory=dict)
     ospf: OspfSpec | None = None
     mstp: MstpSpec | None = None
+    vrrp: VrrpSpec | None = None
 
 
 def _need_mapping(value, where: str) -> dict:
@@ -363,6 +388,83 @@ def _parse_mstp(raw) -> MstpSpec | None:
     return MstpSpec(region=region, devices=devices)
 
 
+def _parse_vrrp(raw) -> VrrpSpec | None:
+    if raw is None:
+        return None
+    raw = _need_mapping(raw, "protocols.vrrp")
+
+    groups_raw = raw.get("groups") or []
+    if not isinstance(groups_raw, list):
+        raise RequirementError("vrrp.groups 应该是列表")
+
+    groups: list[VrrpGroup] = []
+    for item in groups_raw:
+        item = _need_mapping(item, "vrrp.groups 的条目")
+
+        vrid = item.get("vrid")
+        if not isinstance(vrid, int) or not 1 <= vrid <= 255:
+            raise RequirementError(f"VRRP 的 vrid 应该是 1-255 的整数：{vrid!r}")
+
+        interface = item.get("interface")
+        if not isinstance(interface, str) or not interface.strip():
+            raise RequirementError(f"VRRP vrid {vrid} 必须给 interface，如 GigabitEthernet0/0/0 或 Vlanif10")
+
+        virtual_ip = item.get("virtual_ip")
+        if not isinstance(virtual_ip, str):
+            raise RequirementError(f"VRRP vrid {vrid} 必须给 virtual_ip")
+        try:
+            ipaddress.IPv4Address(virtual_ip)
+        except ValueError as exc:
+            raise RequirementError(f"VRRP vrid {vrid} 的 virtual_ip 不是合法 IPv4：{virtual_ip}") from exc
+
+        devices_raw = item.get("devices")
+        if not isinstance(devices_raw, dict) or not devices_raw:
+            raise RequirementError(f"VRRP vrid {vrid} 的 devices 必须是非空键值对（设备名 → 参数）")
+
+        members: dict[str, VrrpDevice] = {}
+        for dev_name, dev_raw in devices_raw.items():
+            dev_raw = _need_mapping(dev_raw, f"vrrp vrid {vrid} 的设备 {dev_name}")
+            priority = dev_raw.get("priority", 100)
+            if not isinstance(priority, int) or not 1 <= priority <= 254:
+                raise RequirementError(
+                    f"VRRP vrid {vrid} 设备 {dev_name} 的 priority 应该是 1-254 的整数"
+                )
+            members[str(dev_name)] = VrrpDevice(priority=priority)
+        groups.append(
+            VrrpGroup(
+                vrid=vrid,
+                interface=interface.strip(),
+                virtual_ip=virtual_ip,
+                devices=members,
+                preempt=_parse_bool(item.get("preempt", True), f"vrrp vrid {vrid}.preempt"),
+                preempt_delay=_parse_delay(item.get("preempt_delay", 0), vrid),
+            )
+        )
+
+    # 同一设备上 vrid 不能重复
+    seen: dict[str, set[int]] = {}
+    for group in groups:
+        for dev_name in group.devices:
+            bucket = seen.setdefault(dev_name, set())
+            if group.vrid in bucket:
+                raise RequirementError(f"{dev_name} 上 VRRP vrid {group.vrid} 重复定义")
+            bucket.add(group.vrid)
+
+    return VrrpSpec(groups=tuple(groups))
+
+
+def _parse_bool(value, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise RequirementError(f"{where} 应该是 true/false")
+    return value
+
+
+def _parse_delay(value, vrid: int) -> int:
+    if not isinstance(value, int) or not 0 <= value <= 3600:
+        raise RequirementError(f"VRRP vrid {vrid} 的 preempt_delay 应该是 0-3600 的整数")
+    return value
+
+
 def load_requirements(path: str | Path) -> Requirements:
     """读取 ``requirements.yaml``。"""
 
@@ -387,4 +489,5 @@ def load_requirements(path: str | Path) -> Requirements:
         devices=devices,
         ospf=_parse_ospf(protocols.get("ospf")),
         mstp=_parse_mstp(protocols.get("mstp")),
+        vrrp=_parse_vrrp(protocols.get("vrrp")),
     )

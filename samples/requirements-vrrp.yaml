@@ -1,0 +1,47 @@
+experiment:
+  name: "实验六 VRRP 网关冗余"
+  notes: "AR1/AR2 在 10.0.1.0/24 上做 VRRP 备份组，虚拟网关 10.0.1.254"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    vlans:
+      - {id: 10, name: student}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        mode: access
+        vlan: 10
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true
+
+  vrrp:
+    groups:
+      - vrid: 1
+        interface: GigabitEthernet0/0/0
+        virtual_ip: 10.0.1.254
+        preempt_delay: 20
+        devices:
+          AR1: {priority: 120}
+          AR2: {priority: 100}
