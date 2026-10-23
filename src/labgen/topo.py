@@ -343,6 +343,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="解析 eNSP .topo，输出设备/接口/连线")
     parser.add_argument("topo", help=".topo 文件路径")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而不是表格")
+    parser.add_argument("--req", help="requirements.yaml，给出后输出每台设备的命令")
     args = parser.parse_args(argv)
 
     try:
@@ -350,6 +351,21 @@ def _main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, TopoError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
+
+    if args.req:
+        from labgen.generators import build_configs
+        from labgen.requirements import RequirementError, load_requirements
+
+        try:
+            configs = build_configs(topo, load_requirements(args.req))
+        except (FileNotFoundError, RequirementError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+        for name, commands in configs.items():
+            print(f"===== {name} =====")
+            print("\n".join(commands))
+            print()
+        return 0
 
     if args.json:
         print(json.dumps(topo.to_dict(), ensure_ascii=False, indent=2))

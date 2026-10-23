@@ -1,0 +1,25 @@
+experiment:
+  name: "实验三 单区域 OSPF"
+  notes: "两台 AR 经 LSW1 互联，跑 OSPF 单区域"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true
