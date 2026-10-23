@@ -1,0 +1,16 @@
+# AI 接入配置示例。
+# 用法：复制本文件为 ai.yaml，按需要填 local 或 cloud 那一节；ai.yaml 不会提交到仓库。
+provider: local          # local 或 cloud
+
+local:
+  base_url: http://127.0.0.1:11434/v1    # Ollama / LM Studio 等 OpenAI 兼容端点
+  model: qwen2.5:7b
+  api_key: ""
+
+cloud:
+  base_url: https://api.deepseek.com/v1  # 任意 OpenAI 兼容云端端点
+  model: deepseek-chat
+  api_key: ""            # 填 sk- 开头的 API Key；也可用环境变量 AI_API_KEY
+
+timeout: 120             # 单次请求超时，秒
+temperature: 0           # 生成配置建议 0，减少随意发挥

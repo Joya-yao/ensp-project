@@ -380,7 +380,38 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--req", help="requirements.yaml，给出后输出每台设备的命令")
     parser.add_argument("--out", help="输出 .docx 路径（需要同时给 --req）")
     parser.add_argument("--validate", action="store_true", help="只校验 requirements.yaml，不解析拓扑")
+    parser.add_argument("--ai-config", help="ai.yaml，配合 --ai-input 把要求原文转成 YAML")
+    parser.add_argument("--ai-input", help="要求原文文件（.md/.txt），用 AI 转成 YAML")
+    parser.add_argument("--ai-out", help="AI 生成的 YAML 路径（默认 requirements.generated.yaml）")
     args = parser.parse_args(argv)
+
+    if args.ai_input:
+        if not args.ai_config:
+            print("错误：--ai-input 需要配合 --ai-config 使用", file=sys.stderr)
+            return 1
+        from labgen.ai import AiError, convert_requirements, load_ai_config
+        from labgen.requirements import RequirementError, load_requirements
+
+        try:
+            ai_config = load_ai_config(args.ai_config)
+            source = Path(args.ai_input).read_text(encoding="utf-8")
+            yaml_text = convert_requirements(ai_config, source)
+        except (FileNotFoundError, AiError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+
+        target = Path(args.ai_out or "requirements.generated.yaml")
+        target.write_text(yaml_text, encoding="utf-8")
+        print(f"已用 {ai_config.provider}（{ai_config.model}）生成：{target}")
+
+        try:
+            requirements = load_requirements(target)
+        except RequirementError as exc:
+            print(f"生成结果校验未通过：{exc}", file=sys.stderr)
+            print("请修正后再用 --validate 复查。", file=sys.stderr)
+            return 1
+        _print_summary(requirements, target)
+        return 0
 
     if args.validate:
         if not args.req:

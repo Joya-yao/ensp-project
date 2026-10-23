@@ -8,3 +8,5 @@ pytest-of-*/
 output/
 samples/*/
 tools/
+ai.yaml
+requirements.generated.yaml
