@@ -1,0 +1,30 @@
+experiment:
+  name: "实验十一 链路聚合"
+  notes: "LSW1 与上行设备用 Eth-Trunk 1 做 LACP 聚合，承载 VLAN 10/20"
+
+devices:
+  LSW1:
+    role: switch
+    layer: aggregation
+    vlans:
+      - {id: 10, name: market}
+      - {id: 20, name: finance}
+    link_aggregation:
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20]
+        members:
+          - GigabitEthernet0/0/3
+          - GigabitEthernet0/0/4
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        mode: access
+        vlan: 10
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true

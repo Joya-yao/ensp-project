@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,6 +60,18 @@ class InterfaceSpec:
 
 
 @dataclass(frozen=True)
+class LinkAggregation:
+    """一个 Eth-Trunk 聚合组。"""
+
+    id: int
+    members: tuple[str, ...]
+    mode: str = "lacp"              # lacp / manual
+    port_mode: str | None = None    # access / trunk
+    vlan: int | None = None
+    allow_vlans: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class DeviceSpec:
     """一台设备的配置意图。"""
 
@@ -66,6 +79,7 @@ class DeviceSpec:
     role: str | None = None
     interfaces: tuple[InterfaceSpec, ...] = ()
     vlans: tuple[VlanSpec, ...] = ()
+    link_aggregations: tuple[LinkAggregation, ...] = ()
     department: str | None = None   # 只用于文档标注，不进命令
     layer: str | None = None        # core / aggregation / access，只用于文档标注
 
@@ -272,6 +286,100 @@ def _parse_interface(raw, device: str) -> InterfaceSpec:
     )
 
 
+def _parse_link_aggregations(
+    raw, device: str, defined: dict[int, str]
+) -> tuple[LinkAggregation, ...]:
+    """解析 link_aggregation 列表。"""
+
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RequirementError(f"{device}.link_aggregation 应该是列表")
+
+    result: list[LinkAggregation] = []
+    used_ids: set[int] = set()
+    used_members: set[str] = set()
+
+    for item in raw:
+        item = _need_mapping(item, f"{device} 的 link_aggregation")
+        lag_id = item.get("id")
+        if not isinstance(lag_id, int) or not 1 <= lag_id <= 128:
+            raise RequirementError(f"{device} 的聚合组 id 应该是 1-128 的整数：{lag_id!r}")
+        if lag_id in used_ids:
+            raise RequirementError(f"{device} 的聚合组 {lag_id} 重复定义")
+        used_ids.add(lag_id)
+
+        members_raw = item.get("members")
+        if not isinstance(members_raw, list) or len(members_raw) < 2:
+            raise RequirementError(f"{device} 的聚合组 {lag_id} 至少要两个成员口")
+        members: list[str] = []
+        for member in members_raw:
+            if not isinstance(member, str) or not member.strip():
+                raise RequirementError(f"{device} 聚合组 {lag_id} 的成员口应该是接口名字符串")
+            key = member.strip().lower()
+            if key in used_members:
+                raise RequirementError(f"{device} 的接口 {member} 被多个聚合组重复使用")
+            used_members.add(key)
+            members.append(member.strip())
+
+        mode = item.get("mode", "lacp")
+        if mode not in ("lacp", "manual"):
+            raise RequirementError(f"{device} 聚合组 {lag_id} 的 mode 只能是 lacp 或 manual")
+
+        port_mode = item.get("port_mode")
+        if port_mode is not None and port_mode not in ("access", "trunk"):
+            raise RequirementError(
+                f"{device} 聚合组 {lag_id} 的 port_mode 只能是 access 或 trunk"
+            )
+
+        vlan = item.get("vlan")
+        if vlan is not None and (not isinstance(vlan, int) or not 1 <= vlan <= 4094):
+            raise RequirementError(f"{device} 聚合组 {lag_id} 的 vlan 应该是 1-4094 的整数")
+
+        allow_raw = item.get("allow_vlans") or []
+        if not isinstance(allow_raw, list):
+            raise RequirementError(f"{device} 聚合组 {lag_id} 的 allow_vlans 应该是列表")
+        allow: list[int] = []
+        for vid in allow_raw:
+            if not isinstance(vid, int) or not 1 <= vid <= 4094:
+                raise RequirementError(
+                    f"{device} 聚合组 {lag_id} 的 allow_vlans 含非法 VLAN：{vid!r}"
+                )
+            allow.append(vid)
+
+        if port_mode == "access" and vlan is None:
+            raise RequirementError(f"{device} 聚合组 {lag_id} 是 access，必须给 vlan")
+        if port_mode == "trunk" and not allow:
+            raise RequirementError(f"{device} 聚合组 {lag_id} 是 trunk，必须给 allow_vlans")
+        if port_mode != "trunk" and allow:
+            raise RequirementError(
+                f"{device} 聚合组 {lag_id} 给了 allow_vlans，但 port_mode 不是 trunk"
+            )
+
+        referenced: list[int] = list(allow)
+        if vlan is not None:
+            referenced.append(vlan)
+        for vid in referenced:
+            if vid not in defined:
+                raise RequirementError(
+                    f"{device} 聚合组 {lag_id} 引用了未定义的 VLAN {vid}；"
+                    f"已定义：{sorted(defined) or '无'}"
+                )
+
+        result.append(
+            LinkAggregation(
+                id=lag_id,
+                members=tuple(members),
+                mode=mode,
+                port_mode=port_mode,
+                vlan=vlan,
+                allow_vlans=tuple(allow),
+            )
+        )
+
+    return tuple(result)
+
+
 def _parse_device(name: str, raw) -> DeviceSpec:
     raw = _need_mapping(raw, f"设备 {name}")
 
@@ -315,6 +423,15 @@ def _parse_device(name: str, raw) -> DeviceSpec:
                     f"已定义：{sorted(defined) or '无'}"
                 )
 
+        match = re.match(r"^vlanif(\d+)$", iface.name.strip(), re.IGNORECASE)
+        if match:
+            vid = int(match.group(1))
+            if vid not in defined:
+                raise RequirementError(
+                    f"{name}/{iface.name} 需要先在 vlans 里定义 VLAN {vid}；"
+                    f"已定义：{sorted(defined) or '无'}"
+                )
+
     department = raw.get("department")
     if department is not None and (not isinstance(department, str) or not department.strip()):
         raise RequirementError(f"{name} 的 department 应该是非空字符串，如 财务部")
@@ -323,11 +440,22 @@ def _parse_device(name: str, raw) -> DeviceSpec:
     if layer is not None and layer not in ("core", "aggregation", "access"):
         raise RequirementError(f"{name} 的 layer 只能是 core / aggregation / access")
 
+    lags = _parse_link_aggregations(raw.get("link_aggregation"), name, defined)
+    iface_names = {iface.name.lower() for iface in interfaces}
+    for lag in lags:
+        for member in lag.members:
+            if member.lower() in iface_names:
+                raise RequirementError(
+                    f"{name} 的接口 {member} 已是聚合组 {lag.id} 的成员，"
+                    "不要再单独写进 interfaces"
+                )
+
     return DeviceSpec(
         name=name,
         role=raw.get("role"),
         interfaces=interfaces,
         vlans=tuple(vlans),
+        link_aggregations=lags,
         department=department.strip() if department else None,
         layer=layer,
     )

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 
 from labgen.requirements import (
     DeviceSpec,
@@ -20,6 +21,7 @@ __all__ = [
     "dhcp_lines",
     "dhcp_pool_commands",
     "ip_commands",
+    "link_aggregation_commands",
     "mstp_commands",
     "ospf_commands",
     "vlan_commands",
@@ -32,6 +34,27 @@ def _mask(address: ipaddress.IPv4Interface) -> str:
     return str(address.netmask)
 
 
+_VLANIF = re.compile(r"^vlanif(\d+)$", re.IGNORECASE)
+
+
+def vlanif_id(name: str) -> int | None:
+    """``Vlanif10`` → 10；不是 Vlanif 就返回 None。"""
+
+    match = _VLANIF.match(name.strip())
+    return int(match.group(1)) if match else None
+
+
+def interface_ok(device: Device, spec: DeviceSpec | None, name: str) -> bool:
+    """接口名是否可用：物理口在拓扑里，或 Vlanif 对应的 VLAN 已定义。"""
+
+    if any(port.name.lower() == name.strip().lower() for port in device.ports):
+        return True
+    vid = vlanif_id(name)
+    if vid is None or spec is None:
+        return False
+    return any(vlan.id == vid for vlan in spec.vlans)
+
+
 def check_specs(topo: Topology, req: Requirements) -> list[str]:
     """校验要求与拓扑是否对得上，返回所有问题（空列表表示没问题）。"""
 
@@ -42,9 +65,15 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
             known = "、".join(d.name for d in topo.devices)
             problems.append(f"要求里的设备 {name} 不在拓扑中（拓扑有：{known}）")
             continue
-        available = {p.name.lower(): p.name for p in device.ports}
         for iface in spec.interfaces:
-            if iface.name.lower() not in available:
+            if interface_ok(device, spec, iface.name):
+                continue
+            vid = vlanif_id(iface.name)
+            if vid is not None:
+                problems.append(
+                    f"{name} 的 {iface.name} 需要先定义 VLAN {vid}"
+                )
+            else:
                 problems.append(
                     f"{name} 没有接口 {iface.name}（可用："
                     + "、".join(p.name for p in device.ports)
@@ -65,10 +94,9 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
                         f"vrrp vrid {group.vrid} 引用了拓扑中不存在的设备 {name}"
                     )
                     continue
-                ports = {p.name.lower() for p in device.ports}
-                if group.interface.lower() not in ports:
+                if not interface_ok(device, req.devices.get(name), group.interface):
                     problems.append(
-                        f"vrrp vrid {group.vrid}：{name} 没有接口 {group.interface}"
+                        f"vrrp vrid {group.vrid}：{name} 没有可用接口 {group.interface}"
                     )
 
     if req.dhcp is not None:
@@ -77,28 +105,63 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
             if device is None:
                 problems.append(f"dhcp 配置里引用了拓扑中不存在的设备 {name}")
                 continue
-            ports = {p.name.lower() for p in device.ports}
             for iface in dev_cfg.interfaces:
-                if iface.lower() not in ports:
-                    problems.append(f"dhcp：{name} 没有接口 {iface}")
+                if not interface_ok(device, req.devices.get(name), iface):
+                    problems.append(f"dhcp：{name} 没有可用接口 {iface}")
 
     for acl in req.acls:
         device = topo.device(acl.device)
         if device is None:
             problems.append(f"acl {acl.name} 引用了拓扑中不存在的设备 {acl.device}")
             continue
-        if acl.interface:
-            ports = {p.name.lower() for p in device.ports}
-            if acl.interface.lower() not in ports:
-                problems.append(
-                    f"acl {acl.name}：{acl.device} 没有接口 {acl.interface}"
-                )
+        if acl.interface and not interface_ok(
+            device, req.devices.get(acl.device), acl.interface
+        ):
+            problems.append(
+                f"acl {acl.name}：{acl.device} 没有可用接口 {acl.interface}"
+            )
+
+    for name, spec in req.devices.items():
+        device = topo.device(name)
+        if device is None:
+            continue
+        ports = {p.name.lower() for p in device.ports}
+        for lag in spec.link_aggregations:
+            for member in lag.members:
+                if member.lower() not in ports:
+                    problems.append(
+                        f"{name} 的聚合组 {lag.id} 成员口 {member} 不在拓扑里"
+                    )
 
     return problems
 
 
 def _spec_for(name: str, req: Requirements) -> DeviceSpec | None:
     return req.devices.get(name)
+
+
+def link_aggregation_commands(device: Device, spec: DeviceSpec) -> list[str]:
+    """Eth-Trunk 聚合组：创建接口、模式、二层属性、成员口加入。"""
+
+    lines: list[str] = []
+    for lag in spec.link_aggregations:
+        lines.append(f"interface Eth-Trunk{lag.id}")
+        if lag.mode == "lacp":
+            lines.append(" mode lacp")
+        if lag.port_mode == "access":
+            lines.append(" port link-type access")
+            lines.append(f" port default vlan {lag.vlan}")
+        elif lag.port_mode == "trunk":
+            allowed = " ".join(str(v) for v in lag.allow_vlans)
+            lines.append(" port link-type trunk")
+            lines.append(f" port trunk allow-pass vlan {allowed}")
+        lines.append(" quit")
+
+        for member in lag.members:
+            lines.append(f"interface {member}")
+            lines.append(f" eth-trunk {lag.id}")
+            lines.append(" quit")
+    return lines
 
 
 def vlan_commands(device: Device, spec: DeviceSpec) -> list[str]:
@@ -366,6 +429,7 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
 
         body: list[str] = [f"sysname {device.name}"]
         body.extend(vlan_commands(device, spec))
+        body.extend(link_aggregation_commands(device, spec))
         body.extend(mstp_commands(device, spec, req))
         vrrp = vrrp_lines(device, req)
         dhcp = dhcp_lines(device, req)

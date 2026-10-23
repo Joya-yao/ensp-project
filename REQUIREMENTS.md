@@ -98,10 +98,18 @@ devices:
     role: switch
     department: 财务部          # 只进文档标题，如「SW1（财务部）」
     layer: access
+    link_aggregation:           # Eth-Trunk 聚合
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20]
+        members: [GigabitEthernet0/0/3, GigabitEthernet0/0/4]
     vlans:
       - {id: 10, name: student}
       - {id: 20, name: teacher}
     interfaces:
+      - name: Vlanif10          # 逻辑三层接口，需先定义 VLAN 10
+        ip: 10.10.0.254/24
       - name: GigabitEthernet0/0/1
         mode: trunk
         allow_vlans: [10, 20]
@@ -138,7 +146,9 @@ protocols:
 - `department`、`layer` 只用于文档标注，**不进命令**；设备名仍用拓扑里的名字（LSW1），文档标题显示「LSW1（财务部）」。
 - ACL 的 `source`/`destination` 可写 `any`、部门 key 或 CIDR；按书写顺序匹配，编号从 5 开始，步长 5。
 - ACL 的 `apply` 决定挂在哪个接口、哪个方向；方向写错规则不生效（其他部门的流量从哪个接口进来，就挂那个接口的 inbound）。
-- 已实现：接口 IP、接口描述、VLAN、Access/Trunk、MSTP、VRRP、DHCP、OSPF 单区域、ACL（部门间访问控制）、部门/层级标注。
+- 接口名写 `Vlanif10` 时，该设备必须先定义 VLAN 10；Vlanif 不需要出现在拓扑的物理端口里。
+- `link_aggregation` 每组至少两个成员口，成员口不能再单独写进 `interfaces`；`mode: lacp|manual`，`port_mode: access|trunk`。
+- 已实现：接口 IP、接口描述、VLAN、Access/Trunk、Vlanif 三层网关、Eth-Trunk 链路聚合、MSTP、VRRP、DHCP、OSPF、ACL、部门/层级标注。
 
 ## 7. 验收标准
 

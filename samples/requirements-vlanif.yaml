@@ -1,0 +1,39 @@
+experiment:
+  name: "实验十 三层网关（Vlanif）"
+  notes: "交换机上用 Vlanif 做网关，OSPF 与 VRRP 都跑在 Vlanif 上"
+
+devices:
+  LSW1:
+    role: switch
+    layer: core
+    vlans:
+      - {id: 10, name: market}
+      - {id: 20, name: finance}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        mode: trunk
+        allow_vlans: [10, 20]
+      - name: Vlanif10
+        ip: 10.10.0.254/24
+        description: gateway-market
+      - name: Vlanif20
+        ip: 10.20.0.254/24
+        description: gateway-finance
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true
+
+  vrrp:
+    groups:
+      - vrid: 10
+        interface: Vlanif10
+        virtual_ip: 10.10.0.1
+        devices:
+          LSW1: {priority: 120}
