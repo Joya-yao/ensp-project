@@ -14,7 +14,14 @@ from labgen.requirements import (
 )
 from labgen.topo import Device, Topology
 
-__all__ = ["build_configs", "ip_commands", "ospf_commands", "vlan_commands", "check_specs"]
+__all__ = [
+    "build_configs",
+    "ip_commands",
+    "mstp_commands",
+    "ospf_commands",
+    "vlan_commands",
+    "check_specs",
+]
 
 
 def _mask(address: ipaddress.IPv4Interface) -> str:
@@ -39,6 +46,12 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
                     + "、".join(p.name for p in device.ports)
                     + "）"
                 )
+
+    if req.mstp is not None:
+        for name in req.mstp.devices:
+            if topo.device(name) is None:
+                problems.append(f"mstp 配置里引用了拓扑中不存在的设备 {name}")
+
     return problems
 
 
@@ -63,7 +76,7 @@ def ip_commands(device: Device, spec: DeviceSpec) -> list[str]:
 
     lines: list[str] = []
     for iface in spec.interfaces:
-        if not (iface.ip or iface.description or iface.mode):
+        if not (iface.ip or iface.description or iface.mode or iface.edged_port):
             continue
         lines.append(f"interface {iface.name}")
         if iface.description:
@@ -78,6 +91,8 @@ def ip_commands(device: Device, spec: DeviceSpec) -> list[str]:
             allowed = " ".join(str(v) for v in iface.allow_vlans)
             lines.append(" port link-type trunk")
             lines.append(f" port trunk allow-pass vlan {allowed}")
+        if iface.edged_port:
+            lines.append(" stp edged-port enable")
         lines.append(" quit")
     return lines
 
@@ -135,6 +150,36 @@ def ospf_commands(device: Device, spec: DeviceSpec, req: Requirements) -> list[s
     return lines
 
 
+def mstp_commands(device: Device, spec: DeviceSpec, req: Requirements) -> list[str]:
+    """MSTP：模式、域参数、实例与桥优先级。只对交换机生效。"""
+
+    cfg = req.mstp
+    if cfg is None or device.device_type != "switch":
+        return []
+
+    dev_cfg = cfg.devices.get(device.name)
+    has_priority = bool(dev_cfg and dev_cfg.priorities)
+    if cfg.region is None and not has_priority:
+        return []
+
+    lines = ["stp mode mstp"]
+    if cfg.region is not None:
+        lines.append("stp region-configuration")
+        lines.append(f" region-name {cfg.region.name}")
+        if cfg.region.revision:
+            lines.append(f" revision-level {cfg.region.revision}")
+        for instance in cfg.region.instances:
+            vlans = " ".join(str(v) for v in instance.vlans)
+            lines.append(f" instance {instance.instance} vlan {vlans}")
+        lines.append(" active region-configuration")
+        lines.append(" quit")
+
+    if has_priority:
+        for instance_id, priority in sorted(dev_cfg.priorities.items()):
+            lines.append(f"stp instance {instance_id} priority {priority}")
+    return lines
+
+
 def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
     """按拓扑顺序为每台设备生成完整命令块。"""
 
@@ -150,6 +195,7 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
 
         body: list[str] = [f"sysname {device.name}"]
         body.extend(vlan_commands(device, spec))
+        body.extend(mstp_commands(device, spec, req))
         body.extend(ip_commands(device, spec))
         body.extend(ospf_commands(device, spec, req))
         if len(body) == 1:

@@ -46,6 +46,7 @@ class InterfaceSpec:
     mode: str | None = None            # access / trunk
     vlan: int | None = None            # access 模式下的归属 VLAN
     allow_vlans: tuple[int, ...] = ()  # trunk 模式放行的 VLAN
+    edged_port: bool = False           # MSTP 边缘端口
 
     @property
     def network(self) -> ipaddress.IPv4Network | None:
@@ -82,10 +83,41 @@ class OspfSpec:
 
 
 @dataclass(frozen=True)
+class MstpInstance:
+    """一个 MSTP 实例及其承载的 VLAN。"""
+
+    instance: int
+    vlans: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class MstpRegion:
+    """MST 域参数，同一域内所有交换机必须一致。"""
+
+    name: str
+    revision: int = 0
+    instances: tuple[MstpInstance, ...] = ()
+
+
+@dataclass(frozen=True)
+class MstpDevice:
+    """一台交换机在 MSTP 里的角色参数。"""
+
+    priorities: dict[int, int] = field(default_factory=dict)  # 实例 → 桥优先级
+
+
+@dataclass(frozen=True)
+class MstpSpec:
+    region: MstpRegion | None = None
+    devices: dict[str, MstpDevice] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Requirements:
     experiment: str = ""
     devices: dict[str, DeviceSpec] = field(default_factory=dict)
     ospf: OspfSpec | None = None
+    mstp: MstpSpec | None = None
 
 
 def _need_mapping(value, where: str) -> dict:
@@ -137,6 +169,10 @@ def _parse_interface(raw, device: str) -> InterfaceSpec:
     if mode != "trunk" and allow:
         raise RequirementError(f"{device}/{name} 给了 allow_vlans，但 mode 不是 trunk")
 
+    edged = raw.get("edged_port", False)
+    if not isinstance(edged, bool):
+        raise RequirementError(f"{device}/{name} 的 edged_port 应该是 true/false")
+
     return InterfaceSpec(
         name=name,
         ip=ip,
@@ -144,6 +180,7 @@ def _parse_interface(raw, device: str) -> InterfaceSpec:
         mode=mode,
         vlan=vlan,
         allow_vlans=tuple(allow),
+        edged_port=edged,
     )
 
 
@@ -242,6 +279,90 @@ def _parse_ospf(raw) -> OspfSpec | None:
     )
 
 
+def _parse_mstp(raw) -> MstpSpec | None:
+    if raw is None:
+        return None
+    raw = _need_mapping(raw, "protocols.mstp")
+
+    region_raw = raw.get("region")
+    region: MstpRegion | None = None
+    if region_raw is not None:
+        region_raw = _need_mapping(region_raw, "mstp.region")
+        name = region_raw.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError("mstp.region.name 必须是非空字符串")
+        if len(name) > 32:
+            raise RequirementError("mstp.region.name 最长 32 个字符（VRP 限制）")
+
+        revision = region_raw.get("revision", 0)
+        if not isinstance(revision, int) or not 0 <= revision <= 65535:
+            raise RequirementError("mstp.region.revision 应该是 0-65535 的整数")
+
+        instances_raw = region_raw.get("instances") or []
+        if not isinstance(instances_raw, list):
+            raise RequirementError("mstp.region.instances 应该是列表")
+        instances: list[MstpInstance] = []
+        used_instances: set[int] = set()
+        vlan_owner: dict[int, int] = {}
+        for item in instances_raw:
+            item = _need_mapping(item, "mstp.region.instances 的条目")
+            inst = item.get("instance")
+            if not isinstance(inst, int) or not 1 <= inst <= 4094:
+                raise RequirementError(f"MSTP 实例号应该是 1-4094 的整数：{inst!r}")
+            if inst in used_instances:
+                raise RequirementError(f"MSTP 实例 {inst} 重复定义")
+            used_instances.add(inst)
+
+            vlans_raw = item.get("vlans") or []
+            if not isinstance(vlans_raw, list) or not vlans_raw:
+                raise RequirementError(f"MSTP 实例 {inst} 必须给非空的 vlans 列表")
+            vlans: list[int] = []
+            for vid in vlans_raw:
+                if not isinstance(vid, int) or not 1 <= vid <= 4094:
+                    raise RequirementError(f"MSTP 实例 {inst} 含非法 VLAN：{vid!r}")
+                if vid in vlan_owner:
+                    raise RequirementError(
+                        f"VLAN {vid} 同时出现在实例 {vlan_owner[vid]} 和 {inst}，一个 VLAN 只能属于一个实例"
+                    )
+                vlan_owner[vid] = inst
+                vlans.append(vid)
+            instances.append(MstpInstance(instance=inst, vlans=tuple(vlans)))
+
+        region = MstpRegion(name=name, revision=revision, instances=tuple(instances))
+
+    devices_raw = raw.get("devices") or {}
+    if not isinstance(devices_raw, dict):
+        raise RequirementError("mstp.devices 应该是键值对（设备名 → 参数）")
+    devices: dict[str, MstpDevice] = {}
+    for dev_name, dev_raw in devices_raw.items():
+        dev_raw = _need_mapping(dev_raw, f"mstp.devices.{dev_name}")
+        prios_raw = dev_raw.get("priorities") or {}
+        if not isinstance(prios_raw, dict):
+            raise RequirementError(f"mstp.devices.{dev_name}.priorities 应该是键值对")
+        priorities: dict[int, int] = {}
+        for key, value in prios_raw.items():
+            try:
+                inst = int(key)
+            except (TypeError, ValueError) as exc:
+                raise RequirementError(
+                    f"mstp.devices.{dev_name}.priorities 的键应该是实例号：{key!r}"
+                ) from exc
+            if not 1 <= inst <= 4094:
+                raise RequirementError(
+                    f"mstp.devices.{dev_name} 的实例号超出范围：{inst}"
+                )
+            if not isinstance(value, int) or value < 0 or value > 61440 or value % 4096:
+                raise RequirementError(
+                    f"mstp.devices.{dev_name} 实例 {inst} 的优先级必须是 0-61440 之间的 4096 倍数"
+                )
+            priorities[inst] = value
+        devices[str(dev_name)] = MstpDevice(priorities=priorities)
+
+    if region is None and not any(d.priorities for d in devices.values()):
+        raise RequirementError("mstp 配置为空：至少要给 region 或设备优先级")
+    return MstpSpec(region=region, devices=devices)
+
+
 def load_requirements(path: str | Path) -> Requirements:
     """读取 ``requirements.yaml``。"""
 
@@ -265,4 +386,5 @@ def load_requirements(path: str | Path) -> Requirements:
         experiment=str(experiment.get("name", "")),
         devices=devices,
         ospf=_parse_ospf(protocols.get("ospf")),
+        mstp=_parse_mstp(protocols.get("mstp")),
     )

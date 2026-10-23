@@ -1,0 +1,59 @@
+experiment:
+  name: "实验五 MSTP 与 VLAN"
+  notes: "LSW1 为 MSTP 根桥，VLAN 10/20 映射到不同实例"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-AR1
+        mode: access
+        vlan: 10
+        edged_port: true
+      - name: GigabitEthernet0/0/2
+        description: to-AR2
+        mode: access
+        vlan: 10
+        edged_port: true
+      - name: GigabitEthernet0/0/3
+        description: uplink
+        mode: trunk
+        allow_vlans: [10, 20]
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true
+
+  mstp:
+    region:
+      name: RG-1
+      revision: 1
+      instances:
+        - {instance: 1, vlans: [10]}
+        - {instance: 2, vlans: [20]}
+    devices:
+      LSW1:
+        priorities:
+          1: 4096
+          2: 8192
