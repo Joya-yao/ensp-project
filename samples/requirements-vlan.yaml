@@ -1,0 +1,44 @@
+experiment:
+  name: "实验四 VLAN 与 OSPF"
+  notes: "LSW1 做二层转发，AR1/AR2 跑 OSPF；VLAN 10 为学生网段"
+
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-LSW1
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-AR1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-AR2
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/3
+        description: uplink
+        mode: trunk
+        allow_vlans: [10, 20]
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - area: 0
+    auto_networks: true

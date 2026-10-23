@@ -14,6 +14,7 @@ import yaml
 
 __all__ = [
     "RequirementError",
+    "VlanSpec",
     "InterfaceSpec",
     "DeviceSpec",
     "OspfArea",
@@ -28,12 +29,23 @@ class RequirementError(Exception):
 
 
 @dataclass(frozen=True)
+class VlanSpec:
+    """一个 VLAN 的配置意图。"""
+
+    id: int
+    name: str | None = None
+
+
+@dataclass(frozen=True)
 class InterfaceSpec:
     """一个接口的配置意图。"""
 
     name: str
     ip: str | None = None
     description: str | None = None
+    mode: str | None = None            # access / trunk
+    vlan: int | None = None            # access 模式下的归属 VLAN
+    allow_vlans: tuple[int, ...] = ()  # trunk 模式放行的 VLAN
 
     @property
     def network(self) -> ipaddress.IPv4Network | None:
@@ -52,6 +64,7 @@ class DeviceSpec:
     name: str
     role: str | None = None
     interfaces: tuple[InterfaceSpec, ...] = ()
+    vlans: tuple[VlanSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,11 +112,62 @@ def _parse_interface(raw, device: str) -> InterfaceSpec:
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
         raise RequirementError(f"{device}/{name} 的 description 应该是字符串")
-    return InterfaceSpec(name=name, ip=ip, description=description)
+
+    mode = raw.get("mode")
+    if mode is not None and mode not in ("access", "trunk"):
+        raise RequirementError(f"{device}/{name} 的 mode 只能是 access 或 trunk")
+
+    vlan = raw.get("vlan")
+    if vlan is not None and (not isinstance(vlan, int) or not 1 <= vlan <= 4094):
+        raise RequirementError(f"{device}/{name} 的 vlan 应该是 1-4094 的整数")
+
+    allow_raw = raw.get("allow_vlans") or []
+    if not isinstance(allow_raw, list):
+        raise RequirementError(f"{device}/{name} 的 allow_vlans 应该是列表")
+    allow: list[int] = []
+    for item in allow_raw:
+        if not isinstance(item, int) or not 1 <= item <= 4094:
+            raise RequirementError(f"{device}/{name} 的 allow_vlans 含非法 VLAN：{item!r}")
+        allow.append(item)
+
+    if mode == "access" and vlan is None:
+        raise RequirementError(f"{device}/{name} 是 access 模式，必须给 vlan")
+    if mode == "trunk" and not allow:
+        raise RequirementError(f"{device}/{name} 是 trunk 模式，必须给 allow_vlans")
+    if mode != "trunk" and allow:
+        raise RequirementError(f"{device}/{name} 给了 allow_vlans，但 mode 不是 trunk")
+
+    return InterfaceSpec(
+        name=name,
+        ip=ip,
+        description=description,
+        mode=mode,
+        vlan=vlan,
+        allow_vlans=tuple(allow),
+    )
 
 
 def _parse_device(name: str, raw) -> DeviceSpec:
     raw = _need_mapping(raw, f"设备 {name}")
+
+    vlans_raw = raw.get("vlans") or []
+    if not isinstance(vlans_raw, list):
+        raise RequirementError(f"{name}.vlans 应该是列表")
+    vlans: list[VlanSpec] = []
+    defined: dict[int, str] = {}
+    for item in vlans_raw:
+        item = _need_mapping(item, f"{name} 的 vlan")
+        vid = item.get("id")
+        if not isinstance(vid, int) or not 1 <= vid <= 4094:
+            raise RequirementError(f"{name} 的 vlan id 应该是 1-4094 的整数：{vid!r}")
+        if vid in defined:
+            raise RequirementError(f"{name} 的 VLAN {vid} 重复定义")
+        vname = item.get("name")
+        if vname is not None and not isinstance(vname, str):
+            raise RequirementError(f"{name} 的 VLAN {vid} 的 name 应该是字符串")
+        defined[vid] = vname or ""
+        vlans.append(VlanSpec(id=vid, name=vname))
+
     interfaces_raw = raw.get("interfaces") or []
     if not isinstance(interfaces_raw, list):
         raise RequirementError(f"{name}.interfaces 应该是列表")
@@ -116,7 +180,19 @@ def _parse_device(name: str, raw) -> DeviceSpec:
             raise RequirementError(f"{name} 的接口 {iface.name} 重复出现")
         seen.add(key)
 
-    return DeviceSpec(name=name, role=raw.get("role"), interfaces=interfaces)
+        referenced: list[int] = list(iface.allow_vlans)
+        if iface.vlan is not None:
+            referenced.append(iface.vlan)
+        for vid in referenced:
+            if vid not in defined:
+                raise RequirementError(
+                    f"{name}/{iface.name} 引用了未定义的 VLAN {vid}；"
+                    f"已定义：{sorted(defined) or '无'}"
+                )
+
+    return DeviceSpec(
+        name=name, role=raw.get("role"), interfaces=interfaces, vlans=tuple(vlans)
+    )
 
 
 def _parse_ospf(raw) -> OspfSpec | None:

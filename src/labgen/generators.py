@@ -14,7 +14,7 @@ from labgen.requirements import (
 )
 from labgen.topo import Device, Topology
 
-__all__ = ["build_configs", "ip_commands", "ospf_commands", "check_specs"]
+__all__ = ["build_configs", "ip_commands", "ospf_commands", "vlan_commands", "check_specs"]
 
 
 def _mask(address: ipaddress.IPv4Interface) -> str:
@@ -46,12 +46,24 @@ def _spec_for(name: str, req: Requirements) -> DeviceSpec | None:
     return req.devices.get(name)
 
 
+def vlan_commands(device: Device, spec: DeviceSpec) -> list[str]:
+    """VLAN 创建与命名。"""
+
+    lines: list[str] = []
+    for vlan in spec.vlans:
+        lines.append(f"vlan {vlan.id}")
+        if vlan.name:
+            lines.append(f" name {vlan.name}")
+        lines.append(" quit")
+    return lines
+
+
 def ip_commands(device: Device, spec: DeviceSpec) -> list[str]:
-    """接口 IP 与描述。"""
+    """接口 IP、描述与二层端口模式。"""
 
     lines: list[str] = []
     for iface in spec.interfaces:
-        if not iface.ip and not iface.description:
+        if not (iface.ip or iface.description or iface.mode):
             continue
         lines.append(f"interface {iface.name}")
         if iface.description:
@@ -59,6 +71,13 @@ def ip_commands(device: Device, spec: DeviceSpec) -> list[str]:
         if iface.ip:
             address = ipaddress.ip_interface(iface.ip)
             lines.append(f" ip address {address.ip} {_mask(address)}")
+        if iface.mode == "access":
+            lines.append(" port link-type access")
+            lines.append(f" port default vlan {iface.vlan}")
+        elif iface.mode == "trunk":
+            allowed = " ".join(str(v) for v in iface.allow_vlans)
+            lines.append(" port link-type trunk")
+            lines.append(f" port trunk allow-pass vlan {allowed}")
         lines.append(" quit")
     return lines
 
@@ -130,6 +149,7 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
             continue
 
         body: list[str] = [f"sysname {device.name}"]
+        body.extend(vlan_commands(device, spec))
         body.extend(ip_commands(device, spec))
         body.extend(ospf_commands(device, spec, req))
         if len(body) == 1:

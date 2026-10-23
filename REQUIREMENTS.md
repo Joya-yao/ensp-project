@@ -121,6 +121,8 @@ protocols:
 - VLAN、接口都用 `id`/`name` 语义字段，不用命令名。
 - IP 一律 CIDR 写法，解析后拆成地址 + 掩码。
 - 协议块可选；不写就不生成对应命令。
+- Access 口必须给 `vlan`，Trunk 口必须给 `allow_vlans`；引用的 VLAN 必须先在设备的 `vlans` 里定义，否则直接报错并列出已定义 VLAN。
+- 已实现：接口 IP、接口描述、VLAN、Access/Trunk、OSPF 单区域。MSTP / VRRP / DHCP 仍是占位。
 
 ## 7. 验收标准
 
