@@ -387,7 +387,61 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ai-config", help="ai.yaml，配合 --ai-input 把要求原文转成 YAML")
     parser.add_argument("--ai-input", help="要求原文文件（.md/.txt），用 AI 转成 YAML")
     parser.add_argument("--ai-out", help="AI 生成的 YAML 路径（默认 requirements.generated.yaml）")
+    parser.add_argument("--scaffold-out", help="生成 groups.yaml 骨架到这个路径（需要 topo）")
+    parser.add_argument("--req-text", help="课程要求原文（.md/.txt），用于从原文里认分组")
+    parser.add_argument("--build-req", help="把 groups.yaml 展开成 requirements.yaml")
+    parser.add_argument("--build-out", help="展开结果路径（默认 requirements.yaml）")
+    parser.add_argument("--force", action="store_true", help="允许覆盖已存在的输出文件")
     args = parser.parse_args(argv)
+
+    if args.scaffold_out:
+        if not args.topo:
+            print("错误：--scaffold-out 需要先给 .topo 文件路径", file=sys.stderr)
+            return 1
+        from labgen.scaffold import build_groups_draft
+
+        try:
+            topo = parse_topo(args.topo)
+        except (FileNotFoundError, TopoError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+        req_text = None
+        if args.req_text:
+            req_text = Path(args.req_text).read_text(encoding="utf-8-sig")
+        draft = build_groups_draft(topo, req_text)
+        target = Path(args.scaffold_out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(draft, encoding="utf-8")
+        print(f"已生成骨架：{target}")
+        print("下一步：填 groups.yaml 里的 TODO，再执行 --build-req")
+        return 0
+
+    if args.build_req:
+        if not args.topo:
+            print("错误：--build-req 需要 --topo 文件路径", file=sys.stderr)
+            return 1
+        from labgen.scaffold import ScaffoldError, expand_groups, load_groups
+
+        try:
+            topo = parse_topo(args.topo)
+            spec = load_groups(args.build_req)
+            text = expand_groups(spec, topo)
+        except (FileNotFoundError, TopoError, ScaffoldError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+
+        target = Path(args.build_out or "requirements.yaml")
+        if target.exists() and not args.force:
+            print(
+                f"错误：{target} 已存在。确认要覆盖请加 --force，或换 --build-out",
+                file=sys.stderr,
+            )
+            return 1
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        print(f"已展开：{target}")
+        print("下一步：改掉里面标 TODO 的行，再 --validate 校验")
+        return 0
 
     if args.ai_input:
         if not args.ai_config:

@@ -42,6 +42,26 @@ C:\Python310\python.exe -m venv .venv
 
 只想看命令、不要 Word，去掉 `--out` 即可直接打印。
 
+## 推荐流程：先出骨架，再展开
+
+要求写得很粗、拓扑已经连好时，不要直接手写 requirements.yaml：
+
+```powershell
+# 1. 从拓扑 + 要求原文生成小骨架（只列分组和设备归属）
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --scaffold-out groups.yaml --req-text 课程设计要求.md
+
+# 2. 改 groups.yaml 里的 TODO：分组名、人数、哪台设备承载哪个组
+
+# 3. 展开成完整 requirements.yaml（自动分 VLAN、网段、网关）
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --build-req groups.yaml --build-out requirements.yaml
+
+# 4. 校验并出文档
+.\.venv\Scripts\python.exe run.py --validate --req requirements.yaml
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --req requirements.yaml --out 配置文档.docx
+```
+
+`--build-req` 不会覆盖已存在的文件，除非加 `--force`。展开结果里带 `# TODO:` 的行（优先级、根桥、物理口归属）需要人工确认。
+
 ## 输入从哪来
 
 | 输入 | 怎么得到 |
@@ -106,6 +126,8 @@ cloud:
 | ACL | `protocols.acl` | `acl number` / `rule` / `traffic-filter` |
 | 部门标注 | `devices[].department` | 只进文档，如「LSW1（财务部）」 |
 | 层级标注 | `devices[].layer` | 只进文档：核心层 / 汇聚层 / 接入层 |
+| 三层网关 | `interfaces[].name: Vlanif10` | `interface Vlanif10`（需先定义 VLAN 10） |
+| 链路聚合 | `link_aggregation[]` | `interface Eth-Trunk` / `mode lacp` / 成员口 `eth-trunk` |
 
 字段与校验规则的完整定义见 [REQUIREMENTS.md](REQUIREMENTS.md)，二次开发的接口说明见 [docs/API.md](docs/API.md)。
 

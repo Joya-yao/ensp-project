@@ -10,11 +10,14 @@
 - **结构化要求**：YAML 定义配置意图，字段贴近人的表达（`vlan: {id: 10, name: student}`），不写命令。读取时做类型、范围、引用关系校验，错误消息带设备名与字段名。
 - **命令生成**：接口 IP/描述、VLAN、Access/Trunk、MSTP（域/实例/优先级/边缘端口）、VRRP（虚拟 IP/优先级/抢占）、DHCP（全局地址池）、OSPF（自动推导网段 + 反掩码）。同一输入输出逐字节一致。
 - **ACL 与部门隔离**：`departments` 定义部门网段，`protocols.acl` 用部门 key 写规则（如「财务可访问服务器、其他禁止访问财务」），生成 `acl number` / `rule` / `traffic-filter`。
+- **Vlanif 三层网关**：接口名可写 `Vlanif10`，只要该设备定义了 VLAN 10；VRRP、OSPF、ACL 都可以挂在 Vlanif 上。
+- **链路聚合**：`link_aggregation` 定义 Eth-Trunk（LACP / 手工），生成 `interface Eth-Trunk`、`mode lacp`、成员口 `eth-trunk N`。
+- **骨架工作流**：`--scaffold-out` 从拓扑和要求原文生成 `groups.yaml`，人工确认分组与设备归属后，`--build-req` 自动分配 VLAN、网段、网关，展开成 `requirements.yaml`。
 - **部门与层级标注**：设备可写 `department`、`layer`，只出现在文档里（标题「LSW1（财务部）」、设备表多出部门/层级两列），不进设备命令。
 - **Word 输出**：按设备分节，命令用 Consolas 等宽块、零行距，支持整段复制；附拓扑概览表与未配置设备清单。
 - **AI 入口（可选）**：`ai.yaml` 切换本地 / 云端 OpenAI 兼容端点，把要求原文转成 YAML，转完自动跑校验。提示词已覆盖部门标注与 ACL 意图判断。
 - **命令行**：`--validate` 只校验要求文件；`--json` 导出拓扑；`--out` 生成 Word。
-- **测试与 CI**：109 个 pytest 用例；GitHub Actions 在 Python 3.10 / 3.12 上跑测试。
+- **测试与 CI**：135 个 pytest 用例；GitHub Actions 在 Python 3.10 / 3.12 上跑测试。
 
 ### 已知限制
 

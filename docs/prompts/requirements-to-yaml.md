@@ -18,7 +18,8 @@
 6. VLAN 必须先在该设备的 `vlans` 里定义，接口只能引用已定义的 VLAN。
 7. 原文说明设备属于哪个部门、在核心/汇聚/接入哪一层时，写进 `department` 和 `layer`；这两个只用于文档标注，不生成命令。
 8. 「其他部门不能访问财务，但财务可以访问服务器」这类访问控制，必须写成 `protocols.acl` 规则：`source`/`destination` 填部门 key 或 `any`，按顺序匹配，最后用 `{action: permit, source: any, destination: any}` 放行其余流量。
-9. 拿不准的字段宁可不写，也不要填错。
+9. 原文说「链路聚合 / 双上行 / Eth-Trunk」时，写进设备的 `link_aggregation`，成员口必须是两个以上物理口。
+10. 拿不准的字段宁可不写，也不要填错。
 
 ### 字段表
 
@@ -39,7 +40,15 @@ devices:
     layer: core | aggregation | access   # 只进文档
     vlans:                       # 交换机用
       - {id: 10, name: student}
+    link_aggregation:            # 链路聚合（可选）
+      - id: 1
+        mode: lacp               # lacp | manual
+        port_mode: trunk         # access | trunk
+        allow_vlans: [10, 20]
+        members: [GigabitEthernet0/0/3, GigabitEthernet0/0/4]
     interfaces:
+      - name: Vlanif10           # 三层网关，需先定义 VLAN 10
+        ip: 10.10.0.254/24
       - name: GigabitEthernet0/0/0
         ip: 10.0.1.1/24          # 三层接口才写
         description: to-R2

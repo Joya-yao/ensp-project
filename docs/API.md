@@ -113,6 +113,7 @@ req.acls              # tuple[AclSpec, ...]
 | 函数 | 输入 | 输出 |
 | --- | --- | --- |
 | `vlan_commands(device, spec)` | 设备 + 要求 | VLAN 创建命令 |
+| `link_aggregation_commands(device, spec)` | 同上 | Eth-Trunk 与成员口 |
 | `mstp_commands(device, spec, req)` | 同上 + 全局 | MSTP 域/实例/优先级 |
 | `ip_commands(device, spec, extras=None)` | `extras` 是「接口名小写 → 额外命令行」 | 接口块 |
 | `vrrp_lines(device, req)` | 设备 + 全局 | `dict[接口名小写, 命令行]` |
@@ -122,6 +123,20 @@ req.acls              # tuple[AclSpec, ...]
 | `ospf_commands(device, spec, req)` | 同上 | OSPF 进程与 network |
 
 `ip_commands` 的 `extras` 用于把 VRRP、DHCP、ACL 下发行合并进同一个接口块，避免重复进入接口视图。
+
+---
+
+## labgen.scaffold
+
+两组文件工作流：`groups.yaml` 骨架 → `requirements.yaml`。
+
+| 函数 | 作用 |
+| --- | --- |
+| `build_groups_draft(topo, req_text=None) -> str` | 从拓扑与要求原文生成骨架 YAML 文本 |
+| `load_groups(path) -> GroupsSpec` | 读取并校验骨架 |
+| `expand_groups(spec, topo) -> str` | 分配 VLAN/网段/网关，展开成 requirements 文本 |
+
+展开规则是确定性的：VLAN 从 `vlan_start` 起按 `vlan_step` 递增，网段 `10.<vlan>.0.0/24`，网关 `.254`；VLAN 号必须 ≤254。
 
 ---
 
