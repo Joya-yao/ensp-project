@@ -344,6 +344,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("topo", help=".topo 文件路径")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而不是表格")
     parser.add_argument("--req", help="requirements.yaml，给出后输出每台设备的命令")
+    parser.add_argument("--out", help="输出 .docx 路径（需要同时给 --req）")
     args = parser.parse_args(argv)
 
     try:
@@ -353,14 +354,26 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.req:
+        from labgen.docx_writer import write_docx
         from labgen.generators import build_configs
         from labgen.requirements import RequirementError, load_requirements
 
         try:
-            configs = build_configs(topo, load_requirements(args.req))
+            requirements = load_requirements(args.req)
+            configs = build_configs(topo, requirements)
         except (FileNotFoundError, RequirementError) as exc:
             print(f"错误：{exc}", file=sys.stderr)
             return 1
+
+        if args.out:
+            try:
+                path = write_docx(topo, requirements, configs, args.out)
+            except ImportError as exc:
+                print(f"错误：写出 Word 需要 python-docx（{exc}）", file=sys.stderr)
+                return 1
+            print(f"已生成：{path}（{len(configs)} 台设备）")
+            return 0
+
         for name, commands in configs.items():
             print(f"===== {name} =====")
             print("\n".join(commands))
