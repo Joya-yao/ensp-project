@@ -339,6 +339,35 @@ def load_topo(path: str | Path) -> dict:
     return parse_topo(path).to_dict()
 
 
+def _print_summary(requirements, path: str | Path) -> None:
+    """校验通过后打印要求文件概况。"""
+
+    devices = requirements.devices
+    iface_count = sum(len(spec.interfaces) for spec in devices.values())
+    vlan_count = sum(len(spec.vlans) for spec in devices.values())
+
+    protocols: list[str] = []
+    if any(iface.ip for spec in devices.values() for iface in spec.interfaces):
+        protocols.append("接口 IP")
+    if vlan_count:
+        protocols.append("VLAN")
+    if requirements.ospf is not None:
+        protocols.append("OSPF")
+    if requirements.mstp is not None:
+        protocols.append("MSTP")
+    if requirements.vrrp is not None:
+        protocols.append("VRRP")
+    if requirements.dhcp is not None:
+        protocols.append("DHCP")
+
+    print(f"要求文件：{Path(path).name}")
+    print(f"实验：{requirements.experiment or '（未命名）'}")
+    print(f"设备 {len(devices)} 台：" + "、".join(devices))
+    print(f"接口 {iface_count} 个，VLAN {vlan_count} 个")
+    print("协议：" + ("、".join(protocols) if protocols else "（无）"))
+    print("校验通过。")
+
+
 def _main(argv: list[str] | None = None) -> int:
     # Windows 控制台默认 GBK，中文输出会乱码
     for stream in (sys.stdout, sys.stderr):
@@ -346,11 +375,30 @@ def _main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(description="解析 eNSP .topo，输出设备/接口/连线")
-    parser.add_argument("topo", help=".topo 文件路径")
+    parser.add_argument("topo", nargs="?", help=".topo 文件路径")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而不是表格")
     parser.add_argument("--req", help="requirements.yaml，给出后输出每台设备的命令")
     parser.add_argument("--out", help="输出 .docx 路径（需要同时给 --req）")
+    parser.add_argument("--validate", action="store_true", help="只校验 requirements.yaml，不解析拓扑")
     args = parser.parse_args(argv)
+
+    if args.validate:
+        if not args.req:
+            print("错误：--validate 需要配合 --req 使用", file=sys.stderr)
+            return 1
+        from labgen.requirements import RequirementError, load_requirements
+
+        try:
+            requirements = load_requirements(args.req)
+        except (FileNotFoundError, RequirementError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+        _print_summary(requirements, args.req)
+        return 0
+
+    if not args.topo:
+        print("错误：缺少 .topo 文件路径（或用 --validate 只校验要求文件）", file=sys.stderr)
+        return 1
 
     try:
         topo = parse_topo(args.topo)

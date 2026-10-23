@@ -56,13 +56,15 @@
 - 输入：`Topology` + `Requirements`
 - 输出：`dict[设备名, list[命令]]`
 - 每一类配置一个生成器（Python 函数），互不依赖，按设备聚合。
-- 首版只做两类：**接口 IP**、**OSPF**。其余留接口占位。
+- 已实现：接口 IP、VLAN、Access/Trunk、MSTP、VRRP、DHCP、OSPF。
 
 ### M4 AI 转换入口（离线步骤，不进运行时）
 
 - 运行时**不调用 AI**，只读 YAML。这样结果可复现、可测试。
 - AI 负责把 Word 原文转成 YAML；输出允许人工修正。
-- 交付物里提供一个 prompt 模板 + 一份示例（输入片段 → 输出 YAML）。
+- 提示词模板：`docs/prompts/requirements-to-yaml.md`，含字段表、约束和常见坑。
+- 示例原文：`samples/teacher-requirements.md`。
+- 转换后先跑 `run.py --validate --req 文件.yaml` 做预检，再生成。
 
 ### M5 文档输出
 

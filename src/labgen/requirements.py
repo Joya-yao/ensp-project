@@ -603,7 +603,7 @@ def load_requirements(path: str | Path) -> Requirements:
 
     protocols = _need_mapping(raw.get("protocols"), "protocols")
 
-    return Requirements(
+    result = Requirements(
         experiment=str(experiment.get("name", "")),
         devices=devices,
         ospf=_parse_ospf(protocols.get("ospf")),
@@ -611,3 +611,8 @@ def load_requirements(path: str | Path) -> Requirements:
         vrrp=_parse_vrrp(protocols.get("vrrp")),
         dhcp=_parse_dhcp(protocols.get("dhcp")),
     )
+    if not result.devices and not any(
+        (result.ospf, result.mstp, result.vrrp, result.dhcp)
+    ):
+        raise RequirementError("要求文件为空：至少要有 devices 或一段协议配置")
+    return result
