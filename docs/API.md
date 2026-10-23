@@ -70,6 +70,8 @@ req = load_requirements("samples/requirements-dhcp.yaml")
 req.experiment        # str
 req.devices           # dict[str, DeviceSpec]
 req.ospf / req.mstp / req.vrrp / req.dhcp   # 各自为 None 或配置对象
+req.departments       # dict[str, Department]，ACL 引用的部门网段
+req.acls              # tuple[AclSpec, ...]
 ```
 
 ### 数据类
@@ -78,11 +80,17 @@ req.ospf / req.mstp / req.vrrp / req.dhcp   # 各自为 None 或配置对象
 | --- | --- |
 | `InterfaceSpec` | `name`、`ip`、`description`、`mode`、`vlan`、`allow_vlans`、`edged_port` |
 | `VlanSpec` | `id`、`name` |
-| `DeviceSpec` | `name`、`role`、`interfaces`、`vlans` |
+| `DeviceSpec` | `name`、`role`、`interfaces`、`vlans`、`department`、`layer` |
+| `Department` | `key`、`name`、`subnet` |
+| `AclRule` | `action`、`source`、`destination`、`protocol`、`destination_port` |
+| `AclSpec` | `name`、`device`、`rules`、`acl_number`、`interface`、`direction` |
 | `OspfSpec` | `process`、`router_id`、`areas`、`auto_networks` |
 | `MstpSpec` | `region`、`devices`（设备名 → 优先级） |
 | `VrrpSpec` | `groups` |
 | `DhcpSpec` | `pools`（名字 → 地址池）、`devices` |
+
+`DeviceSpec.department`、`DeviceSpec.layer` 只用于文档标注，不参与命令生成。
+`AclRule` 的 `source`/`destination` 在解析时已归一化：要么是 `any`，要么是部门 key，要么是 CIDR 字符串。
 
 `InterfaceSpec.network` 是只读属性，返回 `IPv4Network`。
 
@@ -110,9 +118,10 @@ req.ospf / req.mstp / req.vrrp / req.dhcp   # 各自为 None 或配置对象
 | `vrrp_lines(device, req)` | 设备 + 全局 | `dict[接口名小写, 命令行]` |
 | `dhcp_lines(device, req)` | 同上 | `dict[接口名小写, 命令行]` |
 | `dhcp_pool_commands(device, req)` | 同上 | 地址池命令 |
+| `acl_commands(device, req)` | 同上 | `(ACL 定义块, dict[接口名小写, traffic-filter 行])` |
 | `ospf_commands(device, spec, req)` | 同上 | OSPF 进程与 network |
 
-`ip_commands` 的 `extras` 用于把 VRRP、DHCP 的行合并进同一个接口块，避免重复进入接口视图。
+`ip_commands` 的 `extras` 用于把 VRRP、DHCP、ACL 下发行合并进同一个接口块，避免重复进入接口视图。
 
 ---
 

@@ -16,7 +16,9 @@
 4. IP 一律 CIDR 写法（`10.0.1.1/24`），不要写掩码点分十进制。
 5. 设备名照抄原文（R1/AR1/LSW1 等）；接口名用 VRP 写法（`GigabitEthernet0/0/0`），原文只说「1 号口」时写成 `GigabitEthernet0/0/1` 并在注释里标记待确认。
 6. VLAN 必须先在该设备的 `vlans` 里定义，接口只能引用已定义的 VLAN。
-7. 拿不准的字段宁可不写，也不要填错。
+7. 原文说明设备属于哪个部门、在核心/汇聚/接入哪一层时，写进 `department` 和 `layer`；这两个只用于文档标注，不生成命令。
+8. 「其他部门不能访问财务，但财务可以访问服务器」这类访问控制，必须写成 `protocols.acl` 规则：`source`/`destination` 填部门 key 或 `any`，按顺序匹配，最后用 `{action: permit, source: any, destination: any}` 放行其余流量。
+9. 拿不准的字段宁可不写，也不要填错。
 
 ### 字段表
 
@@ -25,9 +27,16 @@ experiment:
   name: 实验名
   notes: 备注（可省略）
 
+departments:                     # ACL 里引用的部门/区域
+  finance:
+    name: 财务部
+    subnet: 10.0.20.0/24
+
 devices:
   <设备名>:
     role: router | switch
+    department: 财务部            # 只进文档标题，不进命令
+    layer: core | aggregation | access   # 只进文档
     vlans:                       # 交换机用
       - {id: 10, name: student}
     interfaces:
@@ -69,6 +78,18 @@ protocols:
       - {name: vlan10, network: 10.0.1.0/24, gateway: 10.0.1.1, dns: [114.114.114.114], lease_days: 1}
     devices:
       AR1: {pools: [vlan10], interfaces: [GigabitEthernet0/0/0]}
+
+  acl:                            # 部门间访问控制
+    - name: finance-guard
+      device: AR1                 # 在哪台设备上配
+      acl_number: 3000            # 可省略，默认 3000、3001…
+      apply:                      # 可选：挂到接口
+        interface: GigabitEthernet0/0/0
+        direction: inbound        # inbound | outbound
+      rules:
+        - {action: permit, source: finance, destination: server}
+        - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
 ```
 
 ### 要求原文

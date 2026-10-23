@@ -79,9 +79,14 @@ experiment:
   name: "实验三 单区域 OSPF"
   notes: "可选备注"
 
+departments:                    # ACL 里引用的部门/区域
+  finance: {name: 财务部, subnet: 10.0.20.0/24}
+  server: {name: 服务器区, subnet: 10.0.30.0/24}
+
 devices:
   R1:
     role: router
+    layer: core                 # core / aggregation / access，只进文档
     interfaces:
       - name: GigabitEthernet0/0/0
         ip: 10.0.1.1/24
@@ -91,6 +96,8 @@ devices:
 
   SW1:
     role: switch
+    department: 财务部          # 只进文档标题，如「SW1（财务部）」
+    layer: access
     vlans:
       - {id: 10, name: student}
       - {id: 20, name: teacher}
@@ -112,10 +119,14 @@ protocols:
     # 简化写法：只给 area，网络从接口 IP 自动推导
     auto_networks: true
 
-  # 预留，v0.2 起支持
-  mstp: {}
-  vrrp: {}
-  dhcp: {}
+  acl:
+    - name: finance-guard
+      device: R1
+      apply: {interface: GigabitEthernet0/0/0, direction: inbound}
+      rules:
+        - {action: permit, source: finance, destination: server}
+        - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
 ```
 
 字段设计约束：
@@ -124,7 +135,10 @@ protocols:
 - IP 一律 CIDR 写法，解析后拆成地址 + 掩码。
 - 协议块可选；不写就不生成对应命令。
 - Access 口必须给 `vlan`，Trunk 口必须给 `allow_vlans`；引用的 VLAN 必须先在设备的 `vlans` 里定义，否则直接报错并列出已定义 VLAN。
-- 已实现：接口 IP、接口描述、VLAN、Access/Trunk、MSTP（域/实例/优先级/边缘端口）、VRRP（虚拟 IP/优先级/抢占）、DHCP（全局地址池/网关/DNS/租期）、OSPF 单区域。需求文档里列出的协议类型全部覆盖。
+- `department`、`layer` 只用于文档标注，**不进命令**；设备名仍用拓扑里的名字（LSW1），文档标题显示「LSW1（财务部）」。
+- ACL 的 `source`/`destination` 可写 `any`、部门 key 或 CIDR；按书写顺序匹配，编号从 5 开始，步长 5。
+- ACL 的 `apply` 决定挂在哪个接口、哪个方向；方向写错规则不生效（其他部门的流量从哪个接口进来，就挂那个接口的 inbound）。
+- 已实现：接口 IP、接口描述、VLAN、Access/Trunk、MSTP、VRRP、DHCP、OSPF 单区域、ACL（部门间访问控制）、部门/层级标注。
 
 ## 7. 验收标准
 
