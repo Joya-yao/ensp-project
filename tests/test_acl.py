@@ -164,6 +164,56 @@ def test_expand_rejects_number_overflow():
         load_yaml(EXPANDED.replace("acl_number: 3000", "acl_number: 3999"))
 
 
+TWO_DEVICES = """
+departments:
+  finance: {name: 财务部, subnet: 10.0.20.0/24}
+devices:
+  AR1:
+    role: router
+    interfaces:
+      - {name: GigabitEthernet0/0/0, ip: 10.0.1.1/24}
+  AR2:
+    role: router
+    interfaces:
+      - {name: GigabitEthernet0/0/0, ip: 10.0.1.2/24}
+protocols:
+  acl:
+    - name: finance-guard
+      device: AR1
+      acl_number: 3000
+      apply: {interface: GigabitEthernet0/0/0, direction: inbound}
+      rules:
+        - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
+    - name: finance-guard
+      device: AR2
+      acl_number: 3000
+      apply: {interface: GigabitEthernet0/0/0, direction: inbound}
+      rules:
+        - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
+"""
+
+
+def test_same_acl_name_on_two_devices_is_allowed(topo):
+    """ACL 名称只要在同一台设备上不重复；两台设备各一条同名 ACL 是常见写法。"""
+
+    req = load_yaml(TWO_DEVICES)
+    assert [acl.name for acl in req.acls] == ["finance-guard", "finance-guard"]
+    configs = build_configs(topo, req)
+    assert "acl number 3000" in configs["AR1"]
+    assert "acl number 3000" in configs["AR2"]
+
+
+def test_same_acl_name_twice_on_one_device_is_rejected():
+    broken = TWO_DEVICES.replace(
+        "      device: AR2\n      acl_number: 3000", "      device: AR1\n      acl_number: 3001"
+    )
+    with pytest.raises(RequirementError) as exc:
+        load_yaml(broken)
+    assert "AR1" in str(exc.value)
+
+
 def test_doc_marks_department_and_layer(topo, req):
     configs = build_configs(topo, req)
     texts = [p.text for p in build_document(topo, req, configs).paragraphs]

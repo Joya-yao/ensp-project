@@ -905,7 +905,7 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
         raise RequirementError("protocols.acl 应该是列表")
 
     acls: list[AclSpec] = []
-    names: set[str] = set()
+    names: set[tuple[str, str]] = set()
     used_numbers: set[tuple[str, int]] = set()
 
     for index, item in enumerate(raw):
@@ -914,14 +914,16 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
         if not isinstance(name, str) or not name.strip():
             raise RequirementError(f"第 {index + 1} 条 acl 缺少 name")
         name = name.strip()
-        if name in names:
-            raise RequirementError(f"ACL 名称 {name} 重复")
-        names.add(name)
 
         device = item.get("device")
         if not isinstance(device, str) or not device.strip():
             raise RequirementError(f"acl {name} 必须给 device（在哪台设备上配）")
         device = device.strip()
+
+        # ACL 名称只要在同一台设备上不重复就行，两台设备各一条同名 ACL 是合法的
+        if (device.lower(), name) in names:
+            raise RequirementError(f"设备 {device} 上 ACL 名称 {name} 重复")
+        names.add((device.lower(), name))
 
         number = item.get("acl_number", 3000 + index)
         if not isinstance(number, int) or not 3000 <= number <= 3999:
