@@ -1,4 +1,4 @@
-"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
+﻿"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
 
 设计目标：
 - 只用标准库，仓库依赖不增加；
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,6 +108,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/open":
             self._open_file(query)
+            return
+        if parsed.path == "/api/version":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "started_at": getattr(self, "started_at", ""),
+                    "pid": getattr(self, "pid", 0),
+                    "root": str(self.root),
+                },
+            )
             return
         if parsed.path == "/api/read":
             self._read_file(query)
@@ -515,8 +527,12 @@ class Handler(BaseHTTPRequestHandler):
                 opener = "open" if sys.platform == "darwin" else "xdg-open"
                 subprocess.Popen([opener, str(target)])  # noqa: S603
         except OSError as exc:
-            self._send_json(*_error(HTTPStatus.BAD_REQUEST, f"打不开文件：{exc}"))
-            return
+            # startfile 失败时退回资源管理器，至少能让用户看到文件在哪
+            try:
+                subprocess.Popen(["explorer", str(target)])  # noqa: S603
+            except OSError:
+                self._send_json(*_error(HTTPStatus.BAD_REQUEST, f"打不开文件：{exc}"))
+                return
         self._send_json(HTTPStatus.OK, {"ok": True, "path": str(target)})
 
     def _download(self, query) -> None:
@@ -594,7 +610,7 @@ def make_server(
     work: Path | None = None,
     final: Path | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
-    """起一个服务，返回 (server, 访问地址)。port=0 时由系统分配。"""
+    """起一个服务，返回 (server, 访问地址)。port=0 时由系统分配，端口被占就往后顺延。"""
 
     root = (root or Path.cwd()).resolve()
     handler = type(
@@ -605,9 +621,21 @@ def make_server(
             "root": root,
             "work": (work or root / "output" / "ui" / "work").resolve(),
             "final": (final or root / "output" / "ui" / "final").resolve(),
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "pid": os.getpid(),
         },
     )
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+    last_error: OSError | None = None
+    for candidate in ([port] if port == 0 else [port, port + 1, port + 2, port + 3, 0]):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), handler)
+            break
+        except OSError as exc:  # 端口被占：换下一个，最后一个用系统分配
+            last_error = exc
+    else:  # pragma: no cover - 兜底
+        raise last_error or OSError("起不来服务")
+
     url = f"http://127.0.0.1:{server.server_address[1]}/?t={handler.token}"
     return server, url
 
@@ -689,6 +717,7 @@ PAGE = """<!doctype html>
 <header>
   <h1>eNSP 配置生成器</h1>
   <span>本地运行 · 数据不出机器</span>
+  <span id="ver" class="muted" style="margin-left:auto">…</span>
 </header>
 <main>
   <section>
@@ -975,6 +1004,12 @@ $("ai-provider").onchange = () => {
   $("ai-model").value = cloud ? "deepseek-chat" : "qwen2.5:7b";
 };
 
+(async () => {
+  try {
+    const r = await getJSON("/api/version");
+    if (r.ok) $("ver").textContent = `服务启动 ${r.started_at} · PID ${r.pid}`;
+  } catch (e) {}
+})();
 loadWork();
 </script>
 </body>
