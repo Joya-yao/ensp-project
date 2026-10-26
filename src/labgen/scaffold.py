@@ -52,7 +52,12 @@ class GroupsSpec:
     vlan_step: int = 10
 
 
-_GROUP_NAME = re.compile(r"([\u4e00-\u9fa5]{2,6}(?:部|组|中心|科|室))")
+_GROUP_NAME = re.compile(r"([\u4e00-\u9fa5]{2,4}(?:部|组|中心|科|室))$")
+
+# 要求原文里常带这些词：「接入交换机分别是销售部」「其他人不能访问财务部」
+# 前者要在「是」处截断，后者整句跳过——都不是分组名
+_CUT_PREFIX = re.compile(r".*(?:是|有|为|包括|含|：|:)")
+_STOP_WORDS = ("不能", "可以", "访问", "其他", "每个", "所有", "包括", "分别", "以及")
 
 
 def _guess_groups(text: str) -> list[tuple[str, int | None]]:
@@ -60,14 +65,24 @@ def _guess_groups(text: str) -> list[tuple[str, int | None]]:
 
     found: list[tuple[str, int | None]] = []
     seen: set[str] = set()
-    for match in _GROUP_NAME.finditer(text):
-        name = match.group(1)
-        if name in seen:
-            continue
-        seen.add(name)
-        tail = text[match.end(): match.end() + 20]
-        size_match = re.search(r"(\d{1,3})\s*人", tail)
-        found.append((name, int(size_match.group(1)) if size_match else None))
+    for line in text.splitlines():
+        for piece in re.split(r"[、，,。；;：:\s/（）()]+", line):
+            piece = piece.strip()
+            if not piece:
+                continue
+            piece = _CUT_PREFIX.sub("", piece).strip()
+            if not piece or any(word in piece for word in _STOP_WORDS):
+                continue
+            match = _GROUP_NAME.search(piece)
+            if match is None:
+                continue
+            name = match.group(1)
+            if name in seen:
+                continue
+            seen.add(name)
+            tail = line[match.end() if match.end() <= len(line) else 0:]
+            size_match = re.search(r"(\d{1,3})\s*人", tail)
+            found.append((name, int(size_match.group(1)) if size_match else None))
     return found
 
 

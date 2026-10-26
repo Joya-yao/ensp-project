@@ -44,6 +44,20 @@ def test_draft_without_text_has_todo(topo):
     assert "groups:" in draft
 
 
+def test_draft_ignores_clauses_around_department_names(topo):
+    text = """
+    接入交换机分别是销售部、后勤部、财务部、研发部。
+    其他人不能访问财务部，但是财务部可以访问其他部门。
+    """
+    draft = build_groups_draft(topo, text)
+    names = [
+        line.split(":", 1)[1].strip()
+        for line in draft.splitlines()
+        if line.strip().startswith("- name:")
+    ]
+    assert names == ["销售部", "后勤部", "财务部", "研发部"]
+ 
+
 def test_load_groups_ok():
     path = write_tmp(
         """
