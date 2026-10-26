@@ -67,9 +67,11 @@ lab.topo  ─┐
 
 ## 快速开始
 
+需要 Python 3.10+。
+
 ```powershell
 # 1. 准备环境（只需一次）
-C:\Python310\python.exe -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install pyyaml python-docx
 
 # 2. 校验要求文件
@@ -78,6 +80,8 @@ C:\Python310\python.exe -m venv .venv
 # 3. 生成 Word（把 你的拓扑.topo 换成你从 eNSP 保存的文件）
 .\.venv\Scripts\python.exe run.py 你的拓扑.topo --req samples\requirements-dhcp.yaml --out output\配置文档.docx
 ```
+
+macOS / Linux 下把 `.\.venv\Scripts\python.exe` 换成 `.venv/bin/python`。
 
 只想看命令、不要 Word，去掉 `--out` 即可直接打印。
 
