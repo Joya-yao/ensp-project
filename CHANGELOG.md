@@ -1,4 +1,4 @@
-﻿# 更新记录
+# 更新记录
 
 ## 未发布
 
@@ -39,6 +39,7 @@
 
 ### 变更
 
+- **双击启动不再要求先手动搭环境**：`启动界面.bat` 首次运行自动探测 Python 3.10+（`py` / `python` / `python3`）、创建 `.venv`、装 `pyyaml python-docx openpyxl`，然后启动界面；`.venv` 已存在但缺依赖时会自动补装。完全找不到 Python 时给出下载地址和「勾选 Add python.exe to PATH」提示，不再是一句 `[ERROR] .venv not found`。
 - `PC/STA 的 IP 不生成` 的限制收窄：PC 地址不写进命令（eNSP 里手工配），但文档会给出建议地址与网关。
 
 ## v0.1.0 — 2026-10-23
