@@ -1,4 +1,4 @@
-"""eNSP ``.topo`` 解析：设备、接口、连接关系。
+﻿"""eNSP ``.topo`` 解析：设备、接口、连接关系。
 
 只做确定性解析：文件里没有的信息不做推断。
 接口编号规则来自实测，见 :data:`MODEL_PORTS`。
@@ -589,8 +589,12 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"错误：{exc}", file=sys.stderr)
             return 1
 
+        from labgen.generators import requirement_warnings
+
         for note in repair_notes:
             print(f"已自动修正：{note}", file=sys.stderr)
+        for note in requirement_warnings(requirements):
+            print(f"提示：{note}", file=sys.stderr)
 
         if args.out:
             try:

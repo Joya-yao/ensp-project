@@ -33,7 +33,7 @@ from labgen import excel
 from labgen.addresses import render_markdown, render_skeleton
 from labgen.ai import AiConfig, AiError, convert_address_table, convert_requirements
 from labgen.docx_writer import write_docx
-from labgen.generators import build_configs
+from labgen.generators import build_configs, requirement_warnings
 from labgen.pastestyle import chunk_commands, to_safe_paste
 from labgen.repair import repair_interfaces
 from labgen.requirements import RequirementError, load_requirements
@@ -317,6 +317,7 @@ class Handler(BaseHTTPRequestHandler):
             req = self._load_req(yaml_text)
             topo = parse_topo(topo_path)
             req, repair_notes = repair_interfaces(topo, req)
+            repair_notes = repair_notes + requirement_warnings(req)
 
             # 地址表 xlsx 存在就以它为准（用户在 Excel 里改过的地址/VLAN 覆盖 YAML）
             applied = None

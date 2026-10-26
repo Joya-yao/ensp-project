@@ -32,6 +32,7 @@ __all__ = [
     "vlan_commands",
     "vrrp_lines",
     "check_specs",
+    "requirement_warnings",
 ]
 
 # VRP 各版本对 icmp-type 名字的支持不一致（有的只认数字），统一转成 type/code，
@@ -70,6 +71,31 @@ def interface_ok(device: Device, spec: DeviceSpec | None, name: str) -> bool:
     if vid is None or spec is None:
         return False
     return any(vlan.id == vid for vlan in spec.vlans)
+
+
+def requirement_warnings(req: Requirements) -> list[str]:
+    """配置本身合法、但达不到「负载分担」目标时给的提示。"""
+
+    notes: list[str] = []
+
+    if req.mstp is not None:
+        instances = req.mstp.region.instances if req.mstp.region else ()
+        if not instances:
+            notes.append(
+                "mstp 没有配置 instances：只会开启 MSTP 防环，不会按 VLAN 做负载分担；"
+                "要做分担请加 region.instances 与每实例根桥优先级"
+            )
+        elif len(instances) == 1:
+            notes.append(
+                "mstp 只有一个实例：所有 VLAN 共用一棵生成树，起不到负载分担作用"
+            )
+
+    if req.vrrp is not None and len(req.vrrp.groups) == 1:
+        notes.append(
+            "vrrp 只有一组：网关是主备关系，不是按 VLAN 分担；要分担请按 VLAN 建两个组、主备互换"
+        )
+
+    return notes
 
 
 def check_specs(topo: Topology, req: Requirements) -> list[str]:

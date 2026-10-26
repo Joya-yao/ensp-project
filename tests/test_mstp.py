@@ -1,4 +1,4 @@
-import tempfile
+﻿import tempfile
 from pathlib import Path
 
 import pytest
@@ -167,3 +167,46 @@ protocols:
 def test_empty_mstp_rejected():
     with pytest.raises(RequirementError):
         load_yaml("protocols:\n  mstp: {}\n")
+
+
+def test_warning_when_instances_missing():
+    from labgen.generators import requirement_warnings
+
+    req = load_yaml(
+        """
+devices:
+  LSW1:
+    role: switch
+    vlans: [{id: 10, name: a}, {id: 20, name: b}]
+    interfaces: [{name: GigabitEthernet0/0/1, mode: access, vlan: 10}]
+protocols:
+  mstp:
+    region: {name: RG-1}
+    devices: {LSW1: {priorities: {1: 4096}}}
+"""
+    )
+    notes = requirement_warnings(req)
+    assert any("没有配置 instances" in note for note in notes)
+
+
+def test_no_warning_when_two_instances():
+    from labgen.generators import requirement_warnings
+
+    req = load_yaml(
+        """
+devices:
+  LSW1:
+    role: switch
+    vlans: [{id: 10, name: a}, {id: 20, name: b}]
+    interfaces: [{name: GigabitEthernet0/0/1, mode: access, vlan: 10}]
+protocols:
+  mstp:
+    region:
+      name: RG-1
+      instances:
+        - {instance: 1, vlans: [10]}
+        - {instance: 2, vlans: [20]}
+    devices: {LSW1: {priorities: {1: 4096, 2: 8192}}}
+"""
+    )
+    assert requirement_warnings(req) == []
