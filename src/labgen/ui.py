@@ -1,4 +1,4 @@
-"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
+﻿"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
 
 设计目标：
 - 只用标准库，仓库依赖不增加；
@@ -147,6 +147,20 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"{label}必须位于项目的 output/ 目录下，例：output/ui/work")
         return resolved
 
+    def _write_path(self, value: str, default: str) -> Path:
+        """把「要写到哪」解析成绝对路径：必须在 output/ 下，扩展名受限。"""
+
+        raw = value.strip() or default
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        resolved = candidate.resolve()
+        if not self._inside(resolved, self._output_dir()):
+            raise ValueError("只能写到项目的 output/ 目录下，例：output/ui/work/addresses.md")
+        if resolved.suffix.lower() not in TEXT_SUFFIXES:
+            raise ValueError(f"只允许写这些类型：{'、'.join(sorted(TEXT_SUFFIXES))}")
+        return resolved
+
     # ---------- 业务 ----------
 
     def _yaml_text(self, payload: dict) -> str:
@@ -218,17 +232,18 @@ class Handler(BaseHTTPRequestHandler):
 
         markdown = render_markdown(topo, req)
 
-        saved = None
-        try:
-            work = self._user_dir(_text(payload, "work_dir", "中间目录"), self._work_dir(), "中间目录")
-            work.mkdir(parents=True, exist_ok=True)
-            target = work / "addresses.md"
-            target.write_text(markdown, encoding="utf-8", newline="")
-            saved = str(target)
-        except (ValueError, OSError):
-            pass  # 保存失败不影响展示
+        target = self._write_path(
+            _text(payload, "addr_path", "地址表路径"), "output/ui/work/addresses.md"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown, encoding="utf-8", newline="")
 
-        return HTTPStatus.OK, {"ok": True, "markdown": markdown, "saved": saved}
+        return HTTPStatus.OK, {
+            "ok": True,
+            "markdown": markdown,
+            "saved": str(target),
+            "name": target.name,
+        }
 
     def _handle_generate(self, payload: dict) -> tuple[int, dict]:
         try:
@@ -247,7 +262,13 @@ class Handler(BaseHTTPRequestHandler):
         docx_path = final_dir / "配置文档.docx"
         try:
             write_docx(topo, req, configs, docx_path)
-            files.append({"name": docx_path.name, "size": docx_path.stat().st_size})
+            files.append(
+                {
+                    "name": docx_path.name,
+                    "size": docx_path.stat().st_size,
+                    "path": str(docx_path),
+                }
+            )
         except ImportError:
             pass  # 没装 python-docx 就只出 txt
 
@@ -260,7 +281,13 @@ class Handler(BaseHTTPRequestHandler):
                 target.write_text(
                     "\r\n".join(chunk) + "\r\n", encoding="utf-8", newline=""
                 )
-                files.append({"name": target.name, "size": target.stat().st_size})
+                files.append(
+                    {
+                        "name": target.name,
+                        "size": target.stat().st_size,
+                        "path": str(target),
+                    }
+                )
 
         return HTTPStatus.OK, {
             "ok": True,
@@ -296,18 +323,15 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(content, str):
             raise ValueError("content 必须是字符串")
 
-        candidate = Path(relative)
-        if not candidate.is_absolute():
-            candidate = self.root / candidate
-        resolved = candidate.resolve()
-        if not self._inside(resolved, self._output_dir()):
-            raise ValueError("只能保存到项目的 output/ 目录下")
-        if resolved.suffix.lower() not in TEXT_SUFFIXES:
-            raise ValueError(f"只允许保存这些类型：{'、'.join(sorted(TEXT_SUFFIXES))}")
-
+        resolved = self._write_path(relative, "output/ui/work/requirements.yaml")
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8", newline="")
-        return HTTPStatus.OK, {"ok": True, "path": str(resolved)}
+        return HTTPStatus.OK, {
+            "ok": True,
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": resolved.stat().st_size,
+        }
 
     def _handle_ai(self, payload: dict) -> tuple[int, dict]:
         text = _text(payload, "text", "要求原文")
@@ -508,6 +532,7 @@ def serve(port: int = 8765, *, open_browser: bool = True, window: bool = False) 
     return 0
 
 
+
 PAGE = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -521,24 +546,29 @@ PAGE = """<!doctype html>
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header span { color: #8b93a1; font-size: 12px; }
   main { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; padding: 16px 20px 40px; }
-  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
   section { min-width: 0; }
   label { display: block; font-size: 12px; color: #9aa3b2; margin: 10px 0 4px; }
   input, textarea, select { width: 100%; background: #161a21; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 8px 10px; font: inherit; }
-  textarea { min-height: 300px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.5; resize: vertical; }
+  textarea { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.5; resize: vertical; }
+  #yaml { min-height: 280px; }
+  #addr { min-height: 160px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
   .row input { flex: 1 1 160px; width: auto; }
   button { background: #2b6cf6; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
   button.ghost { background: #1e232c; color: #c8cfdb; border: 1px solid #2a2f3a; }
   button:disabled { opacity: .55; cursor: progress; }
-  pre { background: #12151b; border: 1px solid #23262d; border-radius: 8px; padding: 12px; overflow: auto; max-height: 420px; font-size: 12.5px; white-space: pre-wrap; }
+  pre { background: #12151b; border: 1px solid #23262d; border-radius: 8px; padding: 12px; overflow: auto; max-height: 300px; font-size: 12.5px; white-space: pre-wrap; }
   .ok { color: #4ade80; } .bad { color: #f87171; } .muted { color: #8b93a1; }
   details { border: 1px solid #23262d; border-radius: 8px; padding: 8px 12px; margin-top: 12px; }
   summary { cursor: pointer; color: #c8cfdb; }
-  ul.files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow: auto; }
-  ul.files li { padding: 4px 0; border-bottom: 1px dashed #23262d; display: flex; justify-content: space-between; gap: 10px; }
+  ul.files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 260px; overflow: auto; }
+  ul.files li { padding: 5px 0; border-bottom: 1px dashed #23262d; }
+  ul.files .path { display: block; font-family: Consolas, monospace; font-size: 11.5px; color: #8b93a1; word-break: break-all; }
+  ul.files .line { display: flex; justify-content: space-between; gap: 10px; }
   a { color: #7aa7ff; cursor: pointer; }
-  .hint { font-size: 12px; color: #8b93a1; margin-top: 4px; }
+  .hint { font-size: 12px; color: #8b93a1; margin-top: 4px; word-break: break-all; }
+  .saved { color: #4ade80; }
 </style>
 </head>
 <body>
@@ -548,26 +578,32 @@ PAGE = """<!doctype html>
 </header>
 <main>
   <section>
-    <label>拓扑文件</label>
-    <div class="row">
-      <input type="file" id="file" accept=".topo">
-      <button id="btn-upload" class="ghost">上传到中间目录</button>
-    </div>
+    <label>拓扑文件（选文件会自动上传并填入路径）</label>
+    <input type="file" id="file" accept=".topo">
     <input id="topo" placeholder="或直接填 .topo 完整路径" style="margin-top:8px">
     <div class="hint" id="topo-hint"></div>
 
     <label>要求 YAML（可直接编辑）</label>
-    <textarea id="yaml" placeholder="把 requirements.yaml 的内容贴进来，或从下面文件列表打开"></textarea>
+    <textarea id="yaml" placeholder="把 requirements.yaml 的内容贴进来，或从下面文件列表点开"></textarea>
     <div class="row">
-      <button id="btn-save" class="ghost">保存到中间目录</button>
-      <input id="save-name" value="requirements.yaml" style="flex:0 0 200px">
+      <input id="save-name" value="requirements.yaml" style="flex:0 0 220px">
+      <button id="btn-save" class="ghost">保存 YAML</button>
     </div>
+    <div class="hint" id="yaml-hint"></div>
+
+    <label>地址表（可编辑，改完点保存）</label>
+    <textarea id="addr" placeholder="点右边「地址表」生成，生成结果会填在这里"></textarea>
+    <div class="row">
+      <input id="addr-path" value="output/ui/work/addresses.md" style="flex:1 1 260px">
+      <button id="btn-save-addr" class="ghost">保存地址表</button>
+    </div>
+    <div class="hint" id="addr-hint"></div>
 
     <label>目录设置（都必须在项目 output/ 下）</label>
     <input id="work-dir" value="output/ui/work" placeholder="中间目录">
     <input id="final-dir" value="output/ui/final" placeholder="最终目录" style="margin-top:8px">
     <div class="row">
-      <button id="btn-list">刷新中间目录</button>
+      <button id="btn-list" class="ghost">刷新中间目录</button>
       <span class="muted" id="work-label"></span>
     </div>
     <ul class="files" id="work-files"></ul>
@@ -605,8 +641,8 @@ PAGE = """<!doctype html>
     </div>
     <label>结果</label>
     <pre id="out">就绪。</pre>
-    <label>生成的文件</label>
-    <ul class="files" id="files"></ul>
+    <label>产物（最近一次操作写出的文件）</label>
+    <ul class="files" id="artifacts"></ul>
   </section>
 </main>
 <script>
@@ -635,35 +671,72 @@ function body(extra) {
     topo: $("topo").value,
     yaml: $("yaml").value,
     work_dir: $("work-dir").value,
-    final_dir: $("final-dir").value
+    final_dir: $("final-dir").value,
+    addr_path: $("addr-path").value
   }, extra || {});
 }
 
-$("btn-upload").onclick = async () => {
+function clearArtifacts() { $("artifacts").innerHTML = ""; }
+
+function addArtifacts(items) {
+  const html = items.map(it => {
+    const link = it.download === false ? "" :
+      `<a href="/api/file?path=${encodeURIComponent(it.path)}">下载</a>`;
+    return `<li>
+      <div class="line"><span>${it.name}</span><span class="muted">${it.size} B</span></div>
+      <span class="path">${it.path}</span>
+      <div class="line"><span></span><span>${link}</span></div>
+    </li>`;
+  }).join("");
+  $("artifacts").innerHTML = html + $("artifacts").innerHTML;
+}
+
+async function uploadIfNeeded() {
   const file = $("file").files[0];
-  if (!file) return show("先选一个 .topo 文件", "bad");
+  if (!file || $("topo").value.trim()) return true;
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const r = await call("/api/upload", {
+    name: file.name, data: btoa(bin), work_dir: $("work-dir").value
+  });
+  if (!r.ok) { show(r.error, "bad"); return false; }
+  $("topo").value = r.path;
+  $("topo-hint").textContent = "已上传：" + r.path;
+  addArtifacts([{name: file.name, size: r.size, path: r.path, download: false}]);
+  loadWork();
+  return true;
+}
+
+$("file").onchange = async () => {
+  $("topo").value = "";
   setBusy(true);
-  try {
-    const buf = await file.arrayBuffer();
-    let bin = ""; const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    const r = await call("/api/upload", {name: file.name, data: btoa(bin), work_dir: $("work-dir").value});
-    if (!r.ok) return show(r.error, "bad");
-    $("topo").value = r.path;
-    $("topo-hint").textContent = "已上传：" + r.path + "（" + r.size + " 字节）";
-    show("上传完成。下一步：填/贴 YAML，然后校验。", "ok");
-    loadWork();
-  } finally { setBusy(false); }
+  try { await uploadIfNeeded(); } finally { setBusy(false); }
 };
 
 $("btn-save").onclick = async () => {
   const name = ($("save-name").value || "requirements.yaml").trim();
-  const dir = ($("work-dir").value || "output/ui/work").replace(/[\\\\/]+$/, "");
+  const dir = ($("work-dir").value || "output/ui/work").replace(/[\\/]+$/, "");
   setBusy(true);
   try {
     const r = await call("/api/save", {path: dir + "/" + name, content: $("yaml").value});
     if (!r.ok) return show(r.error, "bad");
-    show("已保存：" + r.path, "ok");
+    $("yaml-hint").textContent = "已保存：" + r.path + "（" + r.size + " 字节）";
+    show("YAML 已保存到 " + r.path, "ok");
+    addArtifacts([{name: r.name, size: r.size, path: r.path, download: false}]);
+    loadWork();
+  } finally { setBusy(false); }
+};
+
+$("btn-save-addr").onclick = async () => {
+  setBusy(true);
+  try {
+    const r = await call("/api/save", {path: $("addr-path").value, content: $("addr").value});
+    if (!r.ok) return show(r.error, "bad");
+    $("addr-hint").textContent = "已保存：" + r.path;
+    show("地址表已保存到 " + r.path, "ok");
+    addArtifacts([{name: r.name, size: r.size, path: r.path, download: false}]);
     loadWork();
   } finally { setBusy(false); }
 };
@@ -674,13 +747,14 @@ async function loadWork() {
   if (!r.ok) { $("work-files").innerHTML = ""; return; }
   $("work-label").textContent = r.dir;
   $("work-files").innerHTML = r.files.map(f =>
-    `<li><a data-path="${f.path}">${f.name}</a><span class="muted">${f.size} B</span></li>`
+    `<li><div class="line"><a data-path="${f.path}">${f.name}</a><span class="muted">${f.size} B</span></div></li>`
   ).join("") || `<li class="muted">目录是空的</li>`;
   $("work-files").querySelectorAll("a[data-path]").forEach(a => {
     a.onclick = async () => {
       const r2 = await getJSON("/api/read?path=" + encodeURIComponent(a.dataset.path));
       if (!r2.ok) return show(r2.error, "bad");
-      if (r2.path.endsWith(".topo")) { $("topo").value = r2.path; show("已选拓扑：" + r2.path, "ok"); }
+      if (r2.path.endsWith(".topo")) { $("topo").value = r2.path; $("topo-hint").textContent = "已选拓扑：" + r2.path; }
+      else if (r2.path.endsWith(".md")) { $("addr").value = r2.content; $("addr-path").value = r2.path; show("已载入地址表：" + r2.path, "ok"); }
       else { $("yaml").value = r2.content; show("已载入：" + r2.path + "（改完点保存）", "ok"); }
     };
   });
@@ -691,9 +765,10 @@ $("btn-list").onclick = loadWork;
 $("btn-summary").onclick = async () => {
   setBusy(true);
   try {
+    if (!(await uploadIfNeeded())) return;
     const r = await call("/api/summary", body());
     if (!r.ok) return show(r.error, "bad");
-    show(`${r.devices.length} 台设备，${r.links} 条连线\\n\\n` +
+    show(`${r.devices.length} 台设备，${r.links} 条连线\\n拓扑：${$("topo").value}\\n\\n` +
       r.devices.map(d => `${d.name}  ${d.model}  ${d.type}  ${d.ports} 接口`).join("\\n"));
   } finally { setBusy(false); }
 };
@@ -708,24 +783,28 @@ $("btn-validate").onclick = async () => {
 };
 
 $("btn-addr").onclick = async () => {
-  setBusy(true);
+  setBusy(true); clearArtifacts();
   try {
+    if (!(await uploadIfNeeded())) return;
     const r = await call("/api/address-table", body());
     if (!r.ok) return show(r.error, "bad");
-    show(r.markdown + (r.saved ? `\\n\\n已保存：${r.saved}` : ""));
+    $("addr").value = r.markdown;
+    $("addr-path").value = r.saved;
+    $("addr-hint").textContent = "已生成：" + r.saved;
+    show(r.markdown + "\\n\\n—— 已保存到：\\n" + r.saved + "\\n（可在上方文本框修改后点「保存地址表」）");
+    addArtifacts([{name: r.name, size: r.markdown.length, path: r.saved, download: true}]);
     loadWork();
   } finally { setBusy(false); }
 };
 
 $("btn-gen").onclick = async () => {
-  setBusy(true); $("files").innerHTML = "";
+  setBusy(true); clearArtifacts();
   try {
+    if (!(await uploadIfNeeded())) return;
     const r = await call("/api/generate", body());
     if (!r.ok) return show(r.error, "bad");
-    show(`生成完成：${r.devices} 台设备\\n最终目录 ${r.final_dir}`, "ok");
-    $("files").innerHTML = r.files.map(f =>
-      `<li><a href="/api/file?path=${encodeURIComponent(r.final_dir + "/" + f.name)}">${f.name}</a><span class="muted">${f.size} B</span></li>`
-    ).join("");
+    show(`生成完成：${r.devices} 台设备\\n最终目录：${r.final_dir}\\n共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
+    addArtifacts(r.files);
   } finally { setBusy(false); }
 };
 
@@ -741,8 +820,8 @@ $("btn-ai").onclick = async () => {
       mode: $("ai-mode").value
     });
     if (!r.ok) return show(r.error, "bad");
-    if ($("ai-mode").value === "yaml") { $("yaml").value = r.content; show("已填入 YAML，先点校验确认。", "ok"); }
-    else show(r.content);
+    if ($("ai-mode").value === "yaml") { $("yaml").value = r.content; show("已填入 YAML，先点校验确认，再保存。", "ok"); }
+    else { $("addr").value = r.content; show(r.content); }
   } finally { setBusy(false); }
 };
 

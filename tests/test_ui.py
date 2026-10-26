@@ -119,6 +119,30 @@ def test_address_table_saves_markdown_to_work(server, tmp_path):
     saved = tmp_path / "output" / "ui" / "work" / "addresses.md"
     assert saved.is_file()
     assert "10.10.0.254" in saved.read_text(encoding="utf-8")
+    # 前端要能显示到底写到哪了
+    assert data["saved"] == str(saved.resolve())
+    assert data["name"] == "addresses.md"
+
+
+def test_address_table_honours_custom_path(server, tmp_path):
+    srv, url = server
+    status, data = _post(
+        url,
+        "/api/address-table",
+        {"yaml": _yaml(), "addr_path": "output/ui/work/地址表-实验一.md"},
+    )
+    assert data["ok"] is True
+    assert data["name"] == "地址表-实验一.md"
+    assert (tmp_path / "output" / "ui" / "work" / "地址表-实验一.md").is_file()
+
+
+def test_address_table_rejects_path_outside_output(server):
+    srv, url = server
+    status, data = _post(
+        url, "/api/address-table", {"yaml": _yaml(), "addr_path": "C:/Windows/Temp/a.md"}
+    )
+    assert status == 400
+    assert "output" in data["error"]
 
 
 def test_upload_writes_bytes_into_work_dir(server, tmp_path):
@@ -192,6 +216,20 @@ def test_generate_writes_into_final_dir(server, tmp_path):
     names = {item["name"] for item in data["files"]}
     assert "LSW1.txt" in names
     assert (tmp_path / "output" / "ui" / "final" / "LSW1.txt").is_file()
+    # 每个文件都要带绝对路径，页面才能显示「生成到哪了」
+    for item in data["files"]:
+        assert Path(item["path"]).is_absolute()
+        assert Path(item["path"]).is_file()
+
+
+def test_save_reports_name_and_size(server):
+    srv, url = server
+    status, data = _post(
+        url, "/api/save", {"path": "output/ui/work/x.yaml", "content": "a: 1\n"}
+    )
+    assert data["ok"] is True
+    assert data["name"] == "x.yaml"
+    assert data["size"] == 5
 
 
 def test_generate_rejects_final_dir_outside_output(server):
