@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """你是网络实验配置助手。把用户的实验要求转�
    - name 可以写 Vlanif10 这类逻辑接口，但该设备必须先定义 VLAN 10。
    - link_aggregation 元素可用：id、mode（lacp/manual）、port_mode（access/trunk）、vlan、allow_vlans、members（至少两个物理口）。
 4. departments 下每项：name（中文名）、subnet（该部门网段 CIDR）。
-5. protocols 下可用：ospf、mstp、vrrp、dhcp、acl，结构见用户消息里的字段说明。
+5. protocols 下可用：ospf、mstp、vrrp、dhcp、acl、rip、bgp、prefix_list、route_policy、nat，结构见用户消息里的字段说明。
 6. IP 一律 CIDR（10.0.1.1/24）。接口名用 GigabitEthernet0/0/0 形式。
 7. VLAN 必须先在该设备 vlans 里定义，接口只能引用已定义 VLAN。
 8. 原文说「A 不能访问 B，但 B 可以访问 C」这类访问控制，必须写成 acl 规则：
@@ -69,6 +69,11 @@ SYSTEM_PROMPT = """你是网络实验配置助手。把用户的实验要求转�
     - 无状态 ACL 做不到的（双向都要挡、需要会话表）在输出里标 TODO 说明，别硬凑规则。
 11. description、vlan name 只用 ASCII；中文只放 department / experiment.name 这类文档字段。
     eNSP 命令行吃中文会乱码，粘贴会中途失败。
+12. 路由类要求：
+    - RIP 的 network 是类式地址，10.x 一律写 10.0.0.0，别写 10.10.0.0；用 devices 限定跑 RIP 的设备。
+    - BGP 必须给 as 和 neighbors（每个邻居要 remote_as）；network 省略时从接口地址自动宣告。
+    - 前缀列表用 prefix_list，路由策略用 route_policy，策略里引用的 prefix_list / match_acl 必须先定义。
+    - NAT 只支持出方向 easy-ip：基本 ACL 2000-2999 + 出口接口 nat outbound；其他类型标 TODO。
 """
 
 FIELD_GUIDE = """字段示例：
@@ -124,6 +129,24 @@ protocols:
         - {action: deny, protocol: icmp, icmp_type: echo, destination: finance}
         - {action: deny, protocol: tcp, tcp_flag: syn, destination: finance}
         - {action: permit, source: any, destination: any}
+  rip: {process: 1, version: 2, devices: [AR2]}
+  bgp:
+    as: 65001
+    router_id: 1.1.1.1
+    devices: [AR1]
+    neighbors: [{ip: 10.0.1.2, remote_as: 65002}]
+  prefix_list:
+    - name: PL-24
+      device: AR1
+      rules: [{seq: 10, action: permit, prefix: 192.168.0.0/16, greater_equal: 24, less_equal: 24}]
+  route_policy:
+    - name: RP-IN
+      device: AR1
+      apply_peer: 10.0.1.2
+      apply_direction: import
+      nodes: [{seq: 10, action: permit, match_prefix_list: PL-24, apply_local_preference: 200}]
+  nat:
+    - {name: egress, device: AR1, acl_number: 2000, interface: GigabitEthernet0/0/1, source: finance}
 """
 
 

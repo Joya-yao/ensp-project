@@ -17,13 +17,18 @@ from labgen.topo import Device, Topology
 
 __all__ = [
     "acl_commands",
+    "bgp_commands",
     "build_configs",
     "dhcp_lines",
     "dhcp_pool_commands",
     "ip_commands",
     "link_aggregation_commands",
     "mstp_commands",
+    "nat_commands",
     "ospf_commands",
+    "prefix_list_commands",
+    "rip_commands",
+    "route_policy_commands",
     "vlan_commands",
     "vrrp_lines",
     "check_specs",
@@ -96,6 +101,36 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
         for name in req.mstp.devices:
             if topo.device(name) is None:
                 problems.append(f"mstp 配置里引用了拓扑中不存在的设备 {name}")
+
+    if req.rip is not None:
+        for name in req.rip.devices:
+            if topo.device(name) is None:
+                problems.append(f"rip 配置里引用了拓扑中不存在的设备 {name}")
+
+    if req.bgp is not None:
+        for name in req.bgp.devices:
+            if topo.device(name) is None:
+                problems.append(f"bgp 配置里引用了拓扑中不存在的设备 {name}")
+
+    for prefix_list in req.prefix_lists:
+        if topo.device(prefix_list.device) is None:
+            problems.append(
+                f"prefix_list {prefix_list.name} 引用了拓扑中不存在的设备 {prefix_list.device}"
+            )
+
+    for policy in req.route_policies:
+        if topo.device(policy.device) is None:
+            problems.append(
+                f"route_policy {policy.name} 引用了拓扑中不存在的设备 {policy.device}"
+            )
+
+    for nat in req.nats:
+        device = topo.device(nat.device)
+        if device is None:
+            problems.append(f"nat {nat.name} 引用了拓扑中不存在的设备 {nat.device}")
+            continue
+        if not interface_ok(device, req.devices.get(nat.device), nat.interface):
+            problems.append(f"nat {nat.name}：{nat.device} 没有可用接口 {nat.interface}")
 
     if req.vrrp is not None:
         for group in req.vrrp.groups:
@@ -432,6 +467,162 @@ def acl_commands(
     return blocks, apply_map
 
 
+def _dedupe(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _classful(ip: str) -> str:
+    """RIP 的 network 要类式地址：10.x.x.x → 10.0.0.0。"""
+
+    first = int(ipaddress.IPv4Address(ip)) >> 24
+    if first < 128:
+        bits = 8
+    elif first < 192:
+        bits = 16
+    else:
+        bits = 24
+    return str(ipaddress.ip_network(f"{ip}/{bits}", strict=False).network_address)
+
+
+def rip_commands(device: Device, spec: DeviceSpec, req: Requirements) -> list[str]:
+    cfg = req.rip
+    if cfg is None:
+        return []
+    if cfg.devices and device.name not in cfg.devices:
+        return []
+
+    networks: list[str] = []
+    if cfg.auto_networks:
+        for iface in spec.interfaces:
+            address = iface.network
+            if address is None:
+                continue
+            networks.append(_classful(str(iface.ip).split("/")[0]))
+    networks.extend(_dedupe([str(ipaddress.ip_network(n, strict=False).network_address) for n in cfg.networks]))
+    networks = _dedupe(networks)
+    if not networks:
+        return []
+
+    lines = [f"rip {cfg.process}"]
+    if cfg.version == 2:
+        lines.append(" version 2")
+        lines.append(" undo summary")
+    for network in networks:
+        lines.append(f" network {network}")
+    lines.append(" quit")
+    return lines
+
+
+def bgp_commands(device: Device, spec: DeviceSpec, req: Requirements) -> list[str]:
+    cfg = req.bgp
+    if cfg is None:
+        return []
+    if cfg.devices and device.name not in cfg.devices:
+        return []
+
+    lines = [f"bgp {cfg.as_number}"]
+    if cfg.router_id:
+        lines.append(f" router-id {cfg.router_id}")
+
+    for neighbor in cfg.neighbors:
+        lines.append(f" peer {neighbor.ip} as-number {neighbor.remote_as}")
+        if neighbor.description:
+            lines.append(f" peer {neighbor.ip} description {neighbor.description}")
+
+    for policy in req.route_policies:
+        if policy.device == device.name and policy.apply_peer:
+            lines.append(
+                f" peer {policy.apply_peer} route-policy {policy.name} {policy.apply_direction}"
+            )
+
+    networks = []
+    if cfg.auto_networks:
+        for iface in spec.interfaces:
+            if iface.network is not None:
+                networks.append(iface.network)
+    for network in cfg.networks:
+        networks.append(ipaddress.ip_network(network, strict=False))
+
+    for network in _dedupe(networks):
+        lines.append(f" network {network.network_address} {network.netmask}")
+    lines.append(" quit")
+    return lines
+
+
+def prefix_list_commands(device: Device, req: Requirements) -> list[str]:
+    lines: list[str] = []
+    for prefix_list in req.prefix_lists:
+        if prefix_list.device != device.name:
+            continue
+        for rule in prefix_list.rules:
+            network = ipaddress.ip_network(rule.prefix, strict=False)
+            parts = [
+                f"ip ip-prefix {prefix_list.name} index {rule.seq}",
+                rule.action,
+                str(network.network_address),
+                str(network.prefixlen),
+            ]
+            if rule.greater_equal is not None:
+                parts.extend(["greater-equal", str(rule.greater_equal)])
+            if rule.less_equal is not None:
+                parts.extend(["less-equal", str(rule.less_equal)])
+            lines.append(" ".join(parts))
+    return lines
+
+
+def route_policy_commands(device: Device, req: Requirements) -> list[str]:
+    lines: list[str] = []
+    for policy in req.route_policies:
+        if policy.device != device.name:
+            continue
+        for node in policy.nodes:
+            lines.append(f"route-policy {policy.name} {node.action} node {node.seq}")
+            if node.match_prefix_list:
+                lines.append(f" if-match ip-prefix {node.match_prefix_list}")
+            if node.match_acl is not None:
+                lines.append(f" if-match acl {node.match_acl}")
+            if node.apply_cost is not None:
+                lines.append(f" apply cost {node.apply_cost}")
+            if node.apply_local_preference is not None:
+                lines.append(f" apply local-preference {node.apply_local_preference}")
+            if node.apply_tag is not None:
+                lines.append(f" apply tag {node.apply_tag}")
+            lines.append(" quit")
+    return lines
+
+
+def nat_commands(device: Device, req: Requirements) -> tuple[list[str], dict[str, list[str]]]:
+    """出方向 Easy IP：基本 ACL + 接口 nat outbound。"""
+
+    blocks: list[str] = []
+    apply_map: dict[str, list[str]] = {}
+
+    for rule in req.nats:
+        if rule.device != device.name:
+            continue
+
+        blocks.append(f"acl number {rule.acl_number}")
+        if rule.source == "any":
+            blocks.append(" rule 5 permit")
+        else:
+            address, wildcard = _acl_address(rule.source, req)
+            blocks.append(f" rule 5 permit source {address} {wildcard}")
+        blocks.append(" quit")
+
+        apply_map.setdefault(rule.interface.lower(), []).append(
+            f" nat outbound {rule.acl_number}"
+        )
+
+    return blocks, apply_map
+
+
 def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
     """按拓扑顺序为每台设备生成完整命令块。"""
 
@@ -452,19 +643,26 @@ def build_configs(topo: Topology, req: Requirements) -> dict[str, list[str]]:
         vrrp = vrrp_lines(device, req)
         dhcp = dhcp_lines(device, req)
         acl_blocks, acl_apply = acl_commands(device, req)
+        nat_blocks, nat_apply = nat_commands(device, req)
         extras: dict[str, list[str]] = {}
-        for source in (vrrp, dhcp, acl_apply):
+        for source in (vrrp, dhcp, acl_apply, nat_apply):
             for key, lines in source.items():
                 extras.setdefault(key, []).extend(lines)
         covered = {iface.name.lower() for iface in spec.interfaces}
 
         body.extend(dhcp_pool_commands(device, req))
         body.extend(acl_blocks)
+        body.extend(nat_blocks)
+        body.extend(prefix_list_commands(device, req))
+        body.extend(route_policy_commands(device, req))
         body.extend(ip_commands(device, spec, extras))
         body.extend(_leftover_blocks(vrrp, covered))
         body.extend(_leftover_blocks(dhcp, covered))
         body.extend(_leftover_blocks(acl_apply, covered))
+        body.extend(_leftover_blocks(nat_apply, covered))
         body.extend(ospf_commands(device, spec, req))
+        body.extend(rip_commands(device, spec, req))
+        body.extend(bgp_commands(device, spec, req))
         if len(body) == 1:
             continue  # 只有 sysname，没有实际配置
 

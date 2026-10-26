@@ -1,0 +1,61 @@
+experiment:
+  name: "实验十二 RIP / BGP / 路由策略 / NAT"
+  notes: "AR1 与 AR2 之间跑 BGP，AR2 侧用 RIP 引入内网；AR1 用前缀列表+路由策略过滤 BGP 路由，并做 Easy IP 出方向 NAT"
+
+departments:
+  lan: {name: 内网, subnet: 192.168.1.0/24}
+
+devices:
+  AR1:
+    role: router
+    layer: core
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.1/24
+        description: to-AR2
+      - name: GigabitEthernet0/0/1
+        ip: 192.168.1.1/24
+        description: to-LAN
+
+  AR2:
+    role: router
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.1.2/24
+        description: to-AR1
+
+protocols:
+  rip:
+    process: 1
+    version: 2
+    devices: [AR2]
+
+  bgp:
+    as: 65001
+    router_id: 1.1.1.1
+    devices: [AR1]
+    neighbors:
+      - {ip: 10.0.1.2, remote_as: 65002, description: peer-ar2}
+
+  prefix_list:
+    - name: PL-24
+      device: AR1
+      rules:
+        - {seq: 10, action: permit, prefix: 192.168.0.0/16, greater_equal: 24, less_equal: 24}
+        - {seq: 20, action: deny, prefix: 0.0.0.0/0, less_equal: 32}
+
+  route_policy:
+    - name: RP-IN
+      device: AR1
+      apply_peer: 10.0.1.2
+      apply_direction: import
+      nodes:
+        - {seq: 10, action: permit, match_prefix_list: PL-24, apply_local_preference: 200}
+        - {seq: 20, action: deny}
+
+  nat:
+    - name: egress
+      device: AR1
+      acl_number: 2000
+      interface: GigabitEthernet0/0/1
+      source: lan

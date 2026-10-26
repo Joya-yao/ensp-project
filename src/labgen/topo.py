@@ -359,6 +359,16 @@ def _print_summary(requirements, path: str | Path) -> None:
         protocols.append("VRRP")
     if requirements.dhcp is not None:
         protocols.append("DHCP")
+    if requirements.rip is not None:
+        protocols.append("RIP")
+    if requirements.bgp is not None:
+        protocols.append("BGP")
+    if requirements.prefix_lists:
+        protocols.append(f"前缀列表 {len(requirements.prefix_lists)} 个")
+    if requirements.route_policies:
+        protocols.append(f"路由策略 {len(requirements.route_policies)} 条")
+    if requirements.nats:
+        protocols.append(f"NAT {len(requirements.nats)} 条")
     if requirements.acls:
         protocols.append(f"ACL {len(requirements.acls)} 条")
 

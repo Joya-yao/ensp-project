@@ -217,6 +217,82 @@ class AclSpec:
 
 
 @dataclass(frozen=True)
+class RipSpec:
+    """RIP：进程号、版本、要宣告的网段（默认从接口 IP 自动推导）。"""
+
+    process: int = 1
+    version: int = 2
+    auto_networks: bool = True
+    networks: tuple[str, ...] = ()
+    devices: tuple[str, ...] = ()      # 空 = 所有有 IP 的设备
+
+
+@dataclass(frozen=True)
+class BgpNeighbor:
+    ip: str
+    remote_as: int
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class BgpSpec:
+    as_number: int
+    router_id: str | None = None
+    neighbors: tuple[BgpNeighbor, ...] = ()
+    auto_networks: bool = True
+    networks: tuple[str, ...] = ()
+    devices: tuple[str, ...] = ()      # 空 = 所有有 IP 的设备
+
+
+@dataclass(frozen=True)
+class PrefixListRule:
+    seq: int
+    action: str                     # permit / deny
+    prefix: str                     # 10.0.0.0/24
+    greater_equal: int | None = None
+    less_equal: int | None = None
+
+
+@dataclass(frozen=True)
+class PrefixListSpec:
+    name: str
+    device: str
+    rules: tuple[PrefixListRule, ...] = ()
+
+
+@dataclass(frozen=True)
+class RoutePolicyNode:
+    seq: int
+    action: str = "permit"          # permit / deny
+    match_prefix_list: str | None = None
+    match_acl: int | None = None
+    apply_cost: int | None = None
+    apply_local_preference: int | None = None
+    apply_tag: int | None = None
+
+
+@dataclass(frozen=True)
+class RoutePolicySpec:
+    name: str
+    device: str
+    nodes: tuple[RoutePolicyNode, ...] = ()
+    apply_peer: str | None = None       # 在 BGP 邻居上应用
+    apply_direction: str | None = None  # import / export
+
+
+@dataclass(frozen=True)
+class NatRule:
+    """出方向 NAT（Easy IP）：源网段走 ACL，再在出口接口 nat outbound。"""
+
+    name: str
+    device: str
+    acl_number: int
+    interface: str
+    source: str = "any"             # 部门 key / 网段 / any
+    type: str = "easy-ip"
+
+
+@dataclass(frozen=True)
 class Requirements:
     experiment: str = ""
     devices: dict[str, DeviceSpec] = field(default_factory=dict)
@@ -226,6 +302,11 @@ class Requirements:
     vrrp: VrrpSpec | None = None
     dhcp: DhcpSpec | None = None
     acls: tuple[AclSpec, ...] = ()
+    rip: RipSpec | None = None
+    bgp: BgpSpec | None = None
+    prefix_lists: tuple[PrefixListSpec, ...] = ()
+    route_policies: tuple[RoutePolicySpec, ...] = ()
+    nats: tuple[NatRule, ...] = ()
 
 
 def _need_mapping(value, where: str) -> dict:
@@ -1000,6 +1081,366 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
     return tuple(acls)
 
 
+def _parse_rip(raw) -> RipSpec | None:
+    if raw is None:
+        return None
+    raw = _need_mapping(raw, "protocols.rip")
+
+    process = raw.get("process", 1)
+    if not isinstance(process, int) or not 1 <= process <= 65535:
+        raise RequirementError("rip.process 应该是 1-65535 的整数")
+
+    version = raw.get("version", 2)
+    if version not in (1, 2):
+        raise RequirementError("rip.version 只能是 1 或 2")
+
+    auto = raw.get("auto_networks", True)
+    if not isinstance(auto, bool):
+        raise RequirementError("rip.auto_networks 应该是 true/false")
+
+    networks_raw = raw.get("networks") or []
+    if not isinstance(networks_raw, list):
+        raise RequirementError("rip.networks 应该是列表")
+    for network in networks_raw:
+        try:
+            ipaddress.ip_network(network, strict=False)
+        except ValueError as exc:
+            raise RequirementError(f"RIP 网段写法错误：{network}") from exc
+
+    devices = _parse_device_list(raw.get("devices"), "rip")
+
+    return RipSpec(
+        process=process,
+        version=version,
+        auto_networks=auto,
+        networks=tuple(networks_raw),
+        devices=devices,
+    )
+
+
+def _parse_device_list(value, where: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise RequirementError(f"{where}.devices 应该是设备名列表")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise RequirementError(f"{where}.devices 里只能是设备名字符串")
+        result.append(item.strip())
+    return tuple(result)
+
+
+def _parse_bgp(raw) -> BgpSpec | None:
+    if raw is None:
+        return None
+    raw = _need_mapping(raw, "protocols.bgp")
+
+    as_number = raw.get("as", raw.get("as_number"))
+    if not isinstance(as_number, int) or not 1 <= as_number <= 4294967295:
+        raise RequirementError("bgp.as 应该是 1-4294967295 的整数")
+
+    router_id = raw.get("router_id")
+    if router_id is not None:
+        try:
+            ipaddress.IPv4Address(router_id)
+        except ValueError as exc:
+            raise RequirementError(f"bgp.router_id 不是合法 IPv4：{router_id}") from exc
+
+    neighbors_raw = raw.get("neighbors") or []
+    if not isinstance(neighbors_raw, list):
+        raise RequirementError("bgp.neighbors 应该是列表")
+    neighbors: list[BgpNeighbor] = []
+    seen_peers: set[str] = set()
+    for item in neighbors_raw:
+        item = _need_mapping(item, "bgp.neighbors 的条目")
+        ip = item.get("ip")
+        try:
+            ipaddress.IPv4Address(ip)
+        except (ValueError, TypeError) as exc:
+            raise RequirementError(f"bgp.neighbors[].ip 不是合法 IPv4：{ip!r}") from exc
+        if ip in seen_peers:
+            raise RequirementError(f"bgp 邻居 {ip} 重复")
+        seen_peers.add(ip)
+
+        remote_as = item.get("remote_as")
+        if not isinstance(remote_as, int) or not 1 <= remote_as <= 4294967295:
+            raise RequirementError(f"bgp 邻居 {ip} 的 remote_as 应该是正整数")
+
+        description = item.get("description")
+        if description is not None and not isinstance(description, str):
+            raise RequirementError(f"bgp 邻居 {ip} 的 description 应该是字符串")
+
+        neighbors.append(
+            BgpNeighbor(ip=ip, remote_as=remote_as, description=description)
+        )
+
+    auto = raw.get("auto_networks", True)
+    if not isinstance(auto, bool):
+        raise RequirementError("bgp.auto_networks 应该是 true/false")
+
+    networks_raw = raw.get("networks") or []
+    if not isinstance(networks_raw, list):
+        raise RequirementError("bgp.networks 应该是列表")
+    for network in networks_raw:
+        try:
+            ipaddress.ip_network(network, strict=False)
+        except ValueError as exc:
+            raise RequirementError(f"BGP 网段写法错误：{network}") from exc
+
+    return BgpSpec(
+        as_number=as_number,
+        router_id=router_id,
+        neighbors=tuple(neighbors),
+        auto_networks=auto,
+        networks=tuple(networks_raw),
+        devices=_parse_device_list(raw.get("devices"), "bgp"),
+    )
+
+
+def _parse_prefix_lists(raw) -> tuple[PrefixListSpec, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RequirementError("protocols.prefix_list 应该是列表")
+
+    result: list[PrefixListSpec] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        item = _need_mapping(item, "prefix_list 的条目")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError("prefix_list 的 name 必须填写")
+        name = name.strip()
+
+        device = item.get("device")
+        if not isinstance(device, str) or not device.strip():
+            raise RequirementError(f"prefix_list {name} 必须给 device")
+        device = device.strip()
+        if (device.lower(), name) in seen:
+            raise RequirementError(f"设备 {device} 上前缀列表 {name} 重复")
+        seen.add((device.lower(), name))
+
+        rules_raw = item.get("rules")
+        if not isinstance(rules_raw, list) or not rules_raw:
+            raise RequirementError(f"prefix_list {name} 必须给非空的 rules")
+
+        rules: list[PrefixListRule] = []
+        used_seq: set[int] = set()
+        for rule_raw in rules_raw:
+            rule_raw = _need_mapping(rule_raw, f"prefix_list {name} 的规则")
+            seq = rule_raw.get("seq", (len(used_seq) + 1) * 10)
+            if not isinstance(seq, int) or not 1 <= seq <= 65535:
+                raise RequirementError(f"prefix_list {name} 的 seq 应该是 1-65535 的整数")
+            if seq in used_seq:
+                raise RequirementError(f"prefix_list {name} 的 seq {seq} 重复")
+            used_seq.add(seq)
+
+            action = rule_raw.get("action")
+            if action not in ("permit", "deny"):
+                raise RequirementError(f"prefix_list {name} 的 action 只能是 permit 或 deny")
+
+            prefix_raw = rule_raw.get("prefix")
+            try:
+                network = ipaddress.ip_network(prefix_raw, strict=False)
+            except (ValueError, TypeError) as exc:
+                raise RequirementError(
+                    f"prefix_list {name} 的前缀写法错误：{prefix_raw!r}"
+                ) from exc
+            if network.version != 4:
+                raise RequirementError(f"prefix_list {name} 只支持 IPv4 前缀")
+
+            ge = rule_raw.get("greater_equal")
+            le = rule_raw.get("less_equal")
+            for key, value in (("greater_equal", ge), ("less_equal", le)):
+                if value is not None and (not isinstance(value, int) or not 0 <= value <= 32):
+                    raise RequirementError(
+                        f"prefix_list {name} 的 {key} 应该是 0-32 的整数"
+                    )
+            if ge is not None and ge < network.prefixlen:
+                raise RequirementError(
+                    f"prefix_list {name} 的 greater_equal 不能小于前缀长度 {network.prefixlen}"
+                )
+            if ge is not None and le is not None and ge > le:
+                raise RequirementError(f"prefix_list {name} 的 greater_equal 不能大于 less_equal")
+
+            rules.append(
+                PrefixListRule(
+                    seq=seq,
+                    action=action,
+                    prefix=str(network),
+                    greater_equal=ge,
+                    less_equal=le,
+                )
+            )
+
+        result.append(
+            PrefixListSpec(name=name, device=device, rules=tuple(sorted(rules, key=lambda r: r.seq)))
+        )
+    return tuple(result)
+
+
+def _parse_route_policies(
+    raw, prefix_names: dict[str, set[str]], acl_numbers: set[int]
+) -> tuple[RoutePolicySpec, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RequirementError("protocols.route_policy 应该是列表")
+
+    result: list[RoutePolicySpec] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        item = _need_mapping(item, "route_policy 的条目")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError("route_policy 的 name 必须填写")
+        name = name.strip()
+
+        device = item.get("device")
+        if not isinstance(device, str) or not device.strip():
+            raise RequirementError(f"route_policy {name} 必须给 device")
+        device = device.strip()
+        if (device.lower(), name) in seen:
+            raise RequirementError(f"设备 {device} 上路由策略 {name} 重复")
+        seen.add((device.lower(), name))
+
+        nodes_raw = item.get("nodes")
+        if not isinstance(nodes_raw, list) or not nodes_raw:
+            raise RequirementError(f"route_policy {name} 必须给非空的 nodes")
+
+        nodes: list[RoutePolicyNode] = []
+        used_seq: set[int] = set()
+        for node_raw in nodes_raw:
+            node_raw = _need_mapping(node_raw, f"route_policy {name} 的节点")
+            seq = node_raw.get("seq", (len(used_seq) + 1) * 10)
+            if not isinstance(seq, int) or not 1 <= seq <= 65535:
+                raise RequirementError(f"route_policy {name} 的 seq 应该是 1-65535 的整数")
+            if seq in used_seq:
+                raise RequirementError(f"route_policy {name} 的 seq {seq} 重复")
+            used_seq.add(seq)
+
+            action = node_raw.get("action", "permit")
+            if action not in ("permit", "deny"):
+                raise RequirementError(
+                    f"route_policy {name} 的 action 只能是 permit 或 deny"
+                )
+
+            match_pl = node_raw.get("match_prefix_list")
+            if match_pl is not None:
+                if not isinstance(match_pl, str):
+                    raise RequirementError(f"route_policy {name} 的 match_prefix_list 应该是字符串")
+                if match_pl not in prefix_names.get(device.lower(), set()):
+                    raise RequirementError(
+                        f"route_policy {name} 引用了设备 {device} 上不存在的前缀列表 {match_pl}"
+                    )
+
+            match_acl = node_raw.get("match_acl")
+            if match_acl is not None:
+                if not isinstance(match_acl, int) or not 2000 <= match_acl <= 3999:
+                    raise RequirementError(f"route_policy {name} 的 match_acl 应该是 2000-3999")
+                if match_acl not in acl_numbers:
+                    raise RequirementError(
+                        f"route_policy {name} 引用的 ACL {match_acl} 没有定义"
+                    )
+
+            def _int_field(key: str) -> int | None:
+                value = node_raw.get(key)
+                if value is None:
+                    return None
+                if not isinstance(value, int) or value < 0:
+                    raise RequirementError(
+                        f"route_policy {name} 的 {key} 应该是非负整数"
+                    )
+                return value
+
+            nodes.append(
+                RoutePolicyNode(
+                    seq=seq,
+                    action=action,
+                    match_prefix_list=match_pl,
+                    match_acl=match_acl,
+                    apply_cost=_int_field("apply_cost"),
+                    apply_local_preference=_int_field("apply_local_preference"),
+                    apply_tag=_int_field("apply_tag"),
+                )
+            )
+
+        apply_peer = item.get("apply_peer")
+        apply_direction = item.get("apply_direction")
+        if apply_peer is not None or apply_direction is not None:
+            try:
+                ipaddress.IPv4Address(apply_peer)
+            except (ValueError, TypeError) as exc:
+                raise RequirementError(
+                    f"route_policy {name} 的 apply_peer 需要合法 IPv4 邻居地址"
+                ) from exc
+            if apply_direction not in ("import", "export"):
+                raise RequirementError(
+                    f"route_policy {name} 的 apply_direction 只能是 import 或 export"
+                )
+
+        result.append(
+            RoutePolicySpec(
+                name=name,
+                device=device,
+                nodes=tuple(sorted(nodes, key=lambda n: n.seq)),
+                apply_peer=apply_peer,
+                apply_direction=apply_direction,
+            )
+        )
+    return tuple(result)
+
+
+def _parse_nats(raw, departments: dict[str, Department]) -> tuple[NatRule, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise RequirementError("protocols.nat 应该是列表")
+
+    result: list[NatRule] = []
+    for item in raw:
+        item = _need_mapping(item, "nat 的条目")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequirementError("nat 的 name 必须填写")
+        name = name.strip()
+
+        device = item.get("device")
+        if not isinstance(device, str) or not device.strip():
+            raise RequirementError(f"nat {name} 必须给 device")
+        device = device.strip()
+
+        acl_number = item.get("acl_number")
+        if not isinstance(acl_number, int) or not 2000 <= acl_number <= 2999:
+            raise RequirementError(f"nat {name} 的 acl_number 应该是 2000-2999 的整数")
+
+        interface = item.get("interface")
+        if not isinstance(interface, str) or not interface.strip():
+            raise RequirementError(f"nat {name} 必须给 interface（出口接口）")
+        interface = interface.strip()
+
+        nat_type = item.get("type", "easy-ip")
+        if nat_type != "easy-ip":
+            raise RequirementError(
+                f"nat {name} 的 type 目前只支持 easy-ip（出方向地址池在 TODO 里）"
+            )
+
+        source = _resolve_endpoint(item.get("source", "any"), departments, f"nat {name} 的 source")
+
+        result.append(
+            NatRule(
+                name=name,
+                device=device,
+                acl_number=acl_number,
+                interface=interface,
+                source=source,
+                type=nat_type,
+            )
+        )
+    return tuple(result)
+
+
 def load_requirements(path: str | Path) -> Requirements:
     """读取 ``requirements.yaml``。"""
 
@@ -1020,6 +1461,23 @@ def load_requirements(path: str | Path) -> Requirements:
     protocols = _need_mapping(raw.get("protocols"), "protocols")
     departments = _parse_departments(raw.get("departments"))
 
+    acls = _parse_acls(protocols.get("acl"), departments)
+    nats = _parse_nats(protocols.get("nat"), departments)
+    prefix_lists = _parse_prefix_lists(
+        protocols.get("prefix_list") or protocols.get("prefix_lists")
+    )
+
+    prefix_names: dict[str, set[str]] = {}
+    for prefix_list in prefix_lists:
+        prefix_names.setdefault(prefix_list.device.lower(), set()).add(prefix_list.name)
+
+    acl_numbers = {acl.acl_number for acl in acls} | {nat.acl_number for nat in nats}
+    route_policies = _parse_route_policies(
+        protocols.get("route_policy") or protocols.get("route_policies"),
+        prefix_names,
+        acl_numbers,
+    )
+
     result = Requirements(
         experiment=str(experiment.get("name", "")),
         devices=devices,
@@ -1028,10 +1486,26 @@ def load_requirements(path: str | Path) -> Requirements:
         mstp=_parse_mstp(protocols.get("mstp")),
         vrrp=_parse_vrrp(protocols.get("vrrp")),
         dhcp=_parse_dhcp(protocols.get("dhcp")),
-        acls=_parse_acls(protocols.get("acl"), departments),
+        acls=acls,
+        rip=_parse_rip(protocols.get("rip")),
+        bgp=_parse_bgp(protocols.get("bgp")),
+        prefix_lists=prefix_lists,
+        route_policies=route_policies,
+        nats=nats,
     )
     if not result.devices and not any(
-        (result.ospf, result.mstp, result.vrrp, result.dhcp, result.acls)
+        (
+            result.ospf,
+            result.mstp,
+            result.vrrp,
+            result.dhcp,
+            result.acls,
+            result.rip,
+            result.bgp,
+            result.prefix_lists,
+            result.route_policies,
+            result.nats,
+        )
     ):
         raise RequirementError("要求文件为空：至少要有 devices 或一段协议配置")
     return result
