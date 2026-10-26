@@ -15,7 +15,7 @@ eNSP 命令行有一个坏习惯：粘贴时多出来一个换行，控制台可
 
 from __future__ import annotations
 
-__all__ = ["to_safe_paste", "VIEW_STARTS"]
+__all__ = ["to_safe_paste", "chunk_commands", "VIEW_STARTS"]
 
 # 这些命令会进入一个新的子视图
 VIEW_STARTS = (
@@ -61,3 +61,36 @@ def to_safe_paste(commands: list[str]) -> list[str]:
             depth += 1
 
     return out
+
+
+def _split_blocks(commands: list[str]) -> list[list[str]]:
+    """按 return 切块：每块从 system-view 到 return，单独粘也能跑。"""
+
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in commands:
+        current.append(line)
+        if line.strip() == "return":
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def chunk_commands(commands: list[str], limit: int = 40) -> list[list[str]]:
+    """按行数分段，只在不打断视图块的地方切；limit<=0 表示不切。"""
+
+    if limit <= 0:
+        return [commands]
+
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    for block in _split_blocks(commands):
+        if current and len(current) + len(block) > limit:
+            chunks.append(current)
+            current = []
+        current.extend(block)
+    if current:
+        chunks.append(current)
+    return chunks

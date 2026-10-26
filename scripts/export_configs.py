@@ -1,4 +1,4 @@
-"""把生成的命令按设备拆成独立的 .txt，方便在 eNSP 里整段粘贴。
+﻿"""把生成的命令按设备拆成独立的 .txt，方便在 eNSP 里整段粘贴。
 
 用法：
     python scripts/export_configs.py <topo> <requirements.yaml> <输出目录> [--encoding gbk]
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from labgen.generators import build_configs  # noqa: E402
-from labgen.pastestyle import to_safe_paste  # noqa: E402
+from labgen.pastestyle import chunk_commands, to_safe_paste  # noqa: E402
 from labgen.requirements import load_requirements  # noqa: E402
 from labgen.topo import parse_topo  # noqa: E402
 
@@ -51,37 +51,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv[1:])
 
 
-def _split_blocks(commands: list[str]) -> list[list[str]]:
-    """按 return 切块：每块从 system-view 到 return，单独粘也能跑。"""
-
-    blocks: list[list[str]] = []
-    current: list[str] = []
-    for line in commands:
-        current.append(line)
-        if line.strip() == "return":
-            blocks.append(current)
-            current = []
-    if current:
-        blocks.append(current)
-    return blocks
-
-
-def _chunked(commands: list[str], limit: int) -> list[list[str]]:
-    if limit <= 0:
-        return [commands]
-
-    chunks: list[list[str]] = []
-    current: list[str] = []
-    for block in _split_blocks(commands):
-        if current and len(current) + len(block) > limit:
-            chunks.append(current)
-            current = []
-        current.extend(block)
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def main(argv: list[str]) -> int:
     args = _parse_args(argv)
 
@@ -101,7 +70,7 @@ def main(argv: list[str]) -> int:
         if not args.plain:
             lines = to_safe_paste(lines)
 
-        chunks = _chunked(lines, args.chunk)
+        chunks = chunk_commands(lines, args.chunk)
         if len(chunks) == 1:
             (out_dir / f"{name}.txt").write_text(
                 "\r\n".join(chunks[0]) + "\r\n", encoding=args.encoding, newline=""

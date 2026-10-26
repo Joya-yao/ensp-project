@@ -11,6 +11,7 @@ dependencies = ["PyYAML>=6.0", "python-docx>=1.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+ui = ["pywebview>=5"]   # 可选：把网页界面装进独立窗口，不装则用浏览器打开
 
 [project.scripts]
 labgen = "labgen.topo:_main"

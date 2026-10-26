@@ -416,6 +416,14 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--build-req", help="把 groups.yaml 展开成 requirements.yaml")
     parser.add_argument("--build-out", help="展开结果路径（默认 requirements.yaml）")
     parser.add_argument("--force", action="store_true", help="允许覆盖已存在的输出文件")
+    parser.add_argument("--ui", action="store_true", help="启动本地网页界面")
+    parser.add_argument("--port", type=int, default=8765, help="网页界面端口，默认 8765")
+    parser.add_argument(
+        "--window",
+        action="store_true",
+        help="用 pywebview 打开独立窗口（需要 pip install pywebview，没装则退回浏览器）",
+    )
+    parser.add_argument("--no-browser", action="store_true", help="启动 UI 后不自动开浏览器")
     args = parser.parse_args(argv)
 
     if args.scaffold_out:
@@ -528,6 +536,11 @@ def _main(argv: list[str] | None = None) -> int:
             return 1
         _print_summary(requirements, args.req)
         return 0
+
+    if args.ui:
+        from labgen.ui import serve
+
+        return serve(args.port, open_browser=not args.no_browser, window=args.window)
 
     if args.address_table:
         if not args.req:
