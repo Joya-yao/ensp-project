@@ -34,6 +34,7 @@ from labgen.ai import AiConfig, AiError, convert_address_table, convert_requirem
 from labgen.docx_writer import write_docx
 from labgen.generators import build_configs
 from labgen.pastestyle import chunk_commands, to_safe_paste
+from labgen.repair import repair_interfaces
 from labgen.requirements import RequirementError, load_requirements
 from labgen.topo import TopoError, parse_topo
 
@@ -300,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
             stem_for_path = project_stem(topo_path)
             req = self._load_req(yaml_text)
             topo = parse_topo(topo_path)
+            req, repair_notes = repair_interfaces(topo, req)
 
             # 地址表 xlsx 存在就以它为准（用户在 Excel 里改过的地址/VLAN 覆盖 YAML）
             applied = None
@@ -362,6 +364,7 @@ class Handler(BaseHTTPRequestHandler):
             "devices": len(configs),
             "stem": stem,
             "overrides": applied,
+            "warnings": repair_notes,
         }
 
     def _handle_upload(self, payload: dict) -> tuple[int, dict]:
@@ -924,6 +927,7 @@ $("btn-gen").onclick = async () => {
     if (!r.ok) return show(r.error, "bad");
     show(`生成完成：${r.devices} 台设备\\n前缀：${r.stem}\\n最终目录：${r.final_dir}\\n` +
       (r.overrides ? `地址表覆盖自：${r.overrides}\\n` : "未使用地址表覆盖（没有 xlsx 时按 YAML）\\n") +
+      ((r.warnings && r.warnings.length) ? `自动修正 ${r.warnings.length} 处：\\n  ` + r.warnings.join("\\n  ") + "\\n" : "") +
       `共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
     addArtifacts(r.files);
   } finally { setBusy(false); }

@@ -578,14 +578,19 @@ def _main(argv: list[str] | None = None) -> int:
     if args.req:
         from labgen.docx_writer import write_docx
         from labgen.generators import build_configs
+        from labgen.repair import repair_interfaces
         from labgen.requirements import RequirementError, load_requirements
 
         try:
             requirements = load_requirements(args.req)
+            requirements, repair_notes = repair_interfaces(topo, requirements)
             configs = build_configs(topo, requirements)
         except (FileNotFoundError, RequirementError) as exc:
             print(f"错误：{exc}", file=sys.stderr)
             return 1
+
+        for note in repair_notes:
+            print(f"已自动修正：{note}", file=sys.stderr)
 
         if args.out:
             try:
