@@ -1,4 +1,4 @@
-# API 参考
+﻿# API 参考
 
 面向二次开发：所有公开接口都在 `src/labgen/` 下，纯函数为主，没有全局状态。
 
@@ -188,7 +188,7 @@ req.acls              # tuple[AclSpec, ...]
 | `vlan_networks(entries)` | VLAN → 网段，从 `VlanifN` 推 |
 | `network_rows(req)` | 网段与网关表行 |
 | `device_rows(req)` | 每台设备地址表行，自己是网关的写「本机」 |
-| `terminal_rows(topo, req)` | PC 接入位置 + 按顺序分配的建议地址 |
+| `terminal_rows(topo, req, overrides=None)` | PC 接入位置 + 建议地址；`overrides` 是地址表里的终端行，填了 IP 的以它为准并标「地址表」，没填的标「地址表未填」 |
 | `render_markdown(topo, req)` | 三张表的 Markdown 文本，给 `--address-table` 用 |
 
 ## labgen.excel
@@ -243,7 +243,7 @@ POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实
 
 ## labgen.docx_writer
 
-### `build_document(topo, req, configs) -> Document`
+### `build_document(topo, req, configs, terminal_overrides=None) -> Document`
 
 构建 `python-docx` 文档对象但不写盘，便于测试。
 
@@ -251,7 +251,7 @@ POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实
 
 「地址与网关」的网关推断顺序：VRRP 虚拟 IP → DHCP 地址池 `gateway` → 网段内 `.254` → 网段内唯一地址；都没有时写 `—`，不猜。终端建议地址按拓扑连线找到 PC 所连交换机端口，从该端口 access VLAN 的网段里取第一个未占用地址。
 
-### `write_docx(topo, req, configs, path) -> Path`
+### `write_docx(topo, req, configs, path, terminal_overrides=None) -> Path`
 
 调用 `build_document` 并保存，自动建父目录，返回实际路径。
 
