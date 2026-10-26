@@ -786,6 +786,7 @@ PAGE = """<!doctype html>
     <label>结果</label>
     <pre id="out">就绪。</pre>
     <label>产物（最近一次操作写出的文件）</label>
+    <div class="hint">浏览器不能预览 Word/Excel；「打开」是调用本机 Office/WPS。打不开时照下面的完整路径自己去找（浏览器内预览是后续计划）。</div>
     <ul class="files" id="artifacts"></ul>
   </section>
 </main>
@@ -864,7 +865,7 @@ function openPath(path, label) {
   fetch("/api/open?path=" + encodeURIComponent(path))
     .then(r => r.json())
     .then(r => { if (!r.ok) show(r.error, "bad"); else show("已用默认程序打开：" + (label || path), "ok"); })
-    .catch(e => show("打开失败：" + e, "bad"));
+    .catch(e => show("打开失败：" + e + "`n请按产物列表里的完整路径手动打开。", "bad"));
 }
 
 async function uploadIfNeeded() {
