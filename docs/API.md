@@ -207,8 +207,8 @@ HTTP 接口：
 | `/` | GET | 单页界面 |
 | `/api/summary` | POST | 解析拓扑，返回设备与连线概况 |
 | `/api/validate` | POST | 校验 YAML |
-| `/api/address-table` | POST | 返回地址与网关 Markdown，并按 `addr_path`（默认 `output/ui/work/addresses.md`）写盘，返回 `saved` 绝对路径 |
-| `/api/generate` | POST | 生成 docx + 分段 txt 到最终目录，返回文件清单（每项含 `name`/`size`/`path` 绝对路径） |
+| `/api/address-table` | POST | 有 `yaml` 时按 YAML 出地址表，只有 `topo` 时出 `?` 待填模板；按 `addr_path`（默认 `output/ui/work/<拓扑名>-addresses.md`）写盘，返回 `saved`/`mode`/`stem` |
+| `/api/generate` | POST | 生成 `<拓扑名>-配置文档.docx` 与 `<拓扑名>-<设备>.txt`（超 40 行自动分段），返回文件清单（每项含 `name`/`size`/`path` 绝对路径） |
 | `/api/upload` | POST | `{name, data(base64), work_dir}` 把上传的 `.topo` 原始字节写进中间目录 |
 | `/api/save` | POST | `{path, content}` 保存文本文件，只能落在 `output/` 下 |
 | `/api/read` | GET | `?path=` 读取项目目录内的文本文件 |
