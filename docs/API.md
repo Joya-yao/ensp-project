@@ -197,7 +197,7 @@ req.acls              # tuple[AclSpec, ...]
 
 | 函数 | 作用 |
 | --- | --- |
-| `make_server(port=0, root=None, out_dir=None)` | 起服务，返回 `(server, url)`；port=0 时由系统分配，url 里带一次性 token |
+| `make_server(port=0, root=None, work=None, final=None)` | 起服务，返回 `(server, url)`；port=0 时由系统分配，url 里带一次性 token |
 | `serve(port=8765, open_browser=True, window=False)` | 阻塞运行；`window=True` 时尝试用 pywebview 开独立窗口，没装则退回浏览器 |
 
 HTTP 接口：
@@ -207,11 +207,16 @@ HTTP 接口：
 | `/` | GET | 单页界面 |
 | `/api/summary` | POST | 解析拓扑，返回设备与连线概况 |
 | `/api/validate` | POST | 校验 YAML |
-| `/api/address-table` | POST | 返回地址与网关 Markdown |
-| `/api/generate` | POST | 生成 docx + 分段 txt，返回文件清单 |
-| `/api/file?path=` | GET | 下载 `output/` 下的产物 |
+| `/api/address-table` | POST | 返回地址与网关 Markdown，并保存到中间目录 `addresses.md` |
+| `/api/generate` | POST | 生成 docx + 分段 txt 到最终目录，返回文件清单 |
+| `/api/upload` | POST | `{name, data(base64), work_dir}` 把上传的 `.topo` 原始字节写进中间目录 |
+| `/api/save` | POST | `{path, content}` 保存文本文件，只能落在 `output/` 下 |
+| `/api/read` | GET | `?path=` 读取项目目录内的文本文件 |
+| `/api/list` | GET | `?dir=` 列出目录里的 yaml/md/txt/topo |
+| `/api/ai-convert` | POST | `{text, provider, base_url, model, api_key, mode}`，走 `labgen.ai` 出 YAML 或地址表；云端缺 key 直接 400 |
+| `/api/file` | GET | `?path=` 下载 `output/` 下的产物 |
 
-POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实际值）；`yaml`、`topo`、`out_dir` 必须是字符串，类型不对返回 400 而不是断开连接。
+POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实际值）；`yaml`、`topo`、`work_dir`、`final_dir` 必须是字符串，类型不对返回 400 而不是断开连接。目录参数都会被解析成绝对路径，越出 `output/` 直接拒绝。
 
 ## labgen.docx_writer
 
