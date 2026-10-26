@@ -195,12 +195,17 @@ class AclRule:
     destination: str = "any"
     protocol: str = "ip"            # ip / tcp / udp / icmp
     destination_port: int | None = None
+    icmp_type: str | None = None    # echo / echo-reply / ttl-exceeded …
+    tcp_flag: str | None = None     # syn / ack / fin / rst …
     description: str | None = None
 
 
 @dataclass(frozen=True)
 class AclSpec:
-    """一条完整的 ACL 及其下发位置。"""
+    """一条完整的 ACL 及其下发位置。
+
+    ``interfaces`` 非空时一条 ACL 可挂到多个接口上（同方向），用来少写重复 ACL。
+    """
 
     name: str
     device: str
@@ -208,6 +213,7 @@ class AclSpec:
     acl_number: int = 0
     interface: str | None = None
     direction: str | None = None    # inbound / outbound
+    interfaces: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -880,6 +886,33 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
             description = rule_raw.get("description")
             if description is not None and not isinstance(description, str):
                 raise RequirementError(f"acl {name} 的 description 应该是字符串")
+
+            icmp_type = rule_raw.get("icmp_type")
+            if icmp_type is not None:
+                if protocol != "icmp":
+                    raise RequirementError(
+                        f"acl {name} 只有 icmp 规则才能写 icmp_type"
+                    )
+                if not isinstance(icmp_type, str) or not icmp_type.strip():
+                    raise RequirementError(f"acl {name} 的 icmp_type 应该是字符串")
+
+            tcp_flag = rule_raw.get("tcp_flag")
+            if tcp_flag is not None:
+                if protocol != "tcp":
+                    raise RequirementError(f"acl {name} 只有 tcp 规则才能写 tcp_flag")
+                if not isinstance(tcp_flag, str) or tcp_flag.strip().lower() not in (
+                    "syn",
+                    "ack",
+                    "fin",
+                    "rst",
+                    "psh",
+                    "urg",
+                ):
+                    raise RequirementError(
+                        f"acl {name} 的 tcp_flag 只能是 syn/ack/fin/rst/psh/urg"
+                    )
+                tcp_flag = tcp_flag.strip().lower()
+
             rules.append(
                 AclRule(
                     action=action,
@@ -887,23 +920,71 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
                     destination=destination,
                     protocol=protocol,
                     destination_port=port,
+                    icmp_type=icmp_type.strip() if isinstance(icmp_type, str) else None,
+                    tcp_flag=tcp_flag,
                     description=description,
                 )
             )
 
         apply_raw = item.get("apply")
         interface = direction = None
+        interfaces: tuple[str, ...] = ()
+        expand = False
         if apply_raw is not None:
             apply_raw = _need_mapping(apply_raw, f"acl {name}.apply")
-            interface = apply_raw.get("interface")
             direction = apply_raw.get("direction")
-            if not isinstance(interface, str) or not interface.strip():
-                raise RequirementError(f"acl {name}.apply.interface 必须填写")
             if direction not in ("inbound", "outbound"):
                 raise RequirementError(
                     f"acl {name}.apply.direction 只能是 inbound 或 outbound"
                 )
-            interface = interface.strip()
+            expand = bool(apply_raw.get("expand", False))
+
+            interfaces_raw = apply_raw.get("interfaces")
+            if interfaces_raw is not None:
+                if not isinstance(interfaces_raw, list) or not interfaces_raw:
+                    raise RequirementError(f"acl {name}.apply.interfaces 应该是非空列表")
+                cleaned: list[str] = []
+                for entry in interfaces_raw:
+                    if not isinstance(entry, str) or not entry.strip():
+                        raise RequirementError(
+                            f"acl {name}.apply.interfaces 里只能是接口名字符串"
+                        )
+                    cleaned.append(entry.strip())
+                interfaces = tuple(cleaned)
+            else:
+                interface = apply_raw.get("interface")
+                if not isinstance(interface, str) or not interface.strip():
+                    raise RequirementError(
+                        f"acl {name}.apply 需要 interface（单个）或 interfaces（多个）"
+                    )
+                interface = interface.strip()
+
+        if expand and interfaces:
+            # 交换机上同一 ACL 不能重复挂到多个 Vlanif（SACL 限制），
+            # 按接口克隆成多条编号连续的 ACL，规则完全一样。
+            used_numbers.discard((device.lower(), number))  # 基号由克隆重新占用
+            for offset, target in enumerate(interfaces):
+                clone_number = number + offset
+                if clone_number > 3999:
+                    raise RequirementError(
+                        f"acl {name} 展开后编号超过 3999，请把 acl_number 调小"
+                    )
+                if (device.lower(), clone_number) in used_numbers:
+                    raise RequirementError(
+                        f"设备 {device} 上展开出的 ACL 编号 {clone_number} 已被占用"
+                    )
+                used_numbers.add((device.lower(), clone_number))
+                acls.append(
+                    AclSpec(
+                        name=f"{name}-{offset + 1}",
+                        device=device,
+                        rules=tuple(rules),
+                        acl_number=clone_number,
+                        interface=target,
+                        direction=direction,
+                    )
+                )
+            continue
 
         acls.append(
             AclSpec(
@@ -913,6 +994,7 @@ def _parse_acls(raw, departments: dict[str, Department]) -> tuple[AclSpec, ...]:
                 acl_number=number,
                 interface=interface,
                 direction=direction,
+                interfaces=interfaces,
             )
         )
     return tuple(acls)

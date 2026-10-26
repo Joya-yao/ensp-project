@@ -29,6 +29,18 @@ __all__ = [
     "check_specs",
 ]
 
+# VRP 各版本对 icmp-type 名字的支持不一致（有的只认数字），统一转成 type/code，
+# 写错名字会让整条 rule 被拒绝，ACL 只剩 permit，表现为「规则配了但不生效」。
+ICMP_TYPE_CODES = {
+    "echo": "8 0",
+    "echo-reply": "0 0",
+    "unreachable": "3 0",
+    "redirect": "5 0",
+    "time-exceeded": "11 0",
+    "parameter-problem": "12 0",
+    "source-quench": "4 0",
+}
+
 
 def _mask(address: ipaddress.IPv4Interface) -> str:
     return str(address.netmask)
@@ -114,12 +126,10 @@ def check_specs(topo: Topology, req: Requirements) -> list[str]:
         if device is None:
             problems.append(f"acl {acl.name} 引用了拓扑中不存在的设备 {acl.device}")
             continue
-        if acl.interface and not interface_ok(
-            device, req.devices.get(acl.device), acl.interface
-        ):
-            problems.append(
-                f"acl {acl.name}：{acl.device} 没有可用接口 {acl.interface}"
-            )
+        targets = acl.interfaces or ((acl.interface,) if acl.interface else ())
+        for target in targets:
+            if not interface_ok(device, req.devices.get(acl.device), target):
+                problems.append(f"acl {acl.name}：{acl.device} 没有可用接口 {target}")
 
     for name, spec in req.devices.items():
         device = topo.device(name)
@@ -402,14 +412,22 @@ def acl_commands(
                 parts.extend(["destination", address, wildcard])
             if rule.destination_port is not None:
                 parts.extend(["destination-port", "eq", str(rule.destination_port)])
+            if rule.icmp_type:
+                parts.extend(
+                    ["icmp-type", ICMP_TYPE_CODES.get(rule.icmp_type.lower(), rule.icmp_type)]
+                )
+            if rule.tcp_flag:
+                parts.extend(["tcp-flag", rule.tcp_flag])
             blocks.append(" ".join(parts))
             step += 5
         blocks.append(" quit")
 
-        if acl.interface and acl.direction:
-            apply_map.setdefault(acl.interface.lower(), []).append(
-                f" traffic-filter {acl.direction} acl {acl.acl_number}"
-            )
+        targets = acl.interfaces or ((acl.interface,) if acl.interface else ())
+        if acl.direction:
+            for target in targets:
+                apply_map.setdefault(target.lower(), []).append(
+                    f" traffic-filter {acl.direction} acl {acl.acl_number}"
+                )
 
     return blocks, apply_map
 
