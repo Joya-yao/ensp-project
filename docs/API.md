@@ -204,6 +204,15 @@ req.acls              # tuple[AclSpec, ...]
 
 覆盖返回的是新的 `Requirements`（`dataclasses.replace`），原始对象不动。
 
+## labgen.repair
+
+按拓扑校正 YAML 里的接口名，生成命令前调用。
+
+| 函数 | 作用 |
+| --- | --- |
+| `repair_interfaces(topo, req)` | 返回 `(修正后的 Requirements, 说明列表)`：同号换类型（仅当目标端口在拓扑里接了线）、找不到对应端口的整条移除；`Vlanif`、`Eth-Trunk` 等逻辑接口用 `interface_ok` 判定，不动 |
+| `suggest_interface(topo, device, name)` | 单个接口名的建议值，没有就返回 `None` |
+
 ## labgen.ui
 
 本地网页界面，纯标准库（`http.server`），只监听 `127.0.0.1`。
