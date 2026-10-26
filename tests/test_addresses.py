@@ -1,4 +1,4 @@
-import ipaddress
+﻿import ipaddress
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,8 @@ from labgen.addresses import (
     render_markdown,
     terminal_rows,
 )
-from labgen.requirements import load_requirements
+from labgen.addresses import _infer_vlan, clean_cell
+from labgen.requirements import DeviceSpec, InterfaceSpec, VlanSpec, load_requirements
 from labgen.topo import _main, parse_topo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,3 +199,44 @@ def test_stage_two_keeps_yaml_prompt(monkeypatch):
     out = ai.convert_requirements(object(), "已确认的表")
     assert captured["prompt"] is None
     assert out == "experiment: {}\n"
+
+def test_infer_vlan_from_single_access_port():
+    spec = DeviceSpec(
+        name="LSW3",
+        interfaces=(InterfaceSpec(name="GigabitEthernet0/0/1", mode="access", vlan=10),),
+        vlans=(VlanSpec(id=10),),
+    )
+    assert _infer_vlan(spec) == 10
+
+
+def test_infer_vlan_from_single_declared_vlan():
+    """"上行是 trunk 时，设备只声明了一个 VLAN 也能推断。"""
+
+    spec = DeviceSpec(
+        name="LSW3",
+        interfaces=(
+            InterfaceSpec(name="GigabitEthernet0/0/1", mode="trunk", allow_vlans=(20,)),
+        ),
+        vlans=(VlanSpec(id=20),),
+    )
+    assert _infer_vlan(spec) == 20
+
+
+def test_infer_vlan_ambiguous_returns_none():
+    spec = DeviceSpec(
+        name="LSW3",
+        interfaces=(
+            InterfaceSpec(name="GigabitEthernet0/0/1", mode="access", vlan=10),
+            InterfaceSpec(name="Ethernet0/0/1", mode="access", vlan=20),
+        ),
+        vlans=(VlanSpec(id=10), VlanSpec(id=20)),
+    )
+    assert _infer_vlan(spec) is None
+
+
+def test_clean_cell_drops_placeholder_text():
+    assert clean_cell("未识别（端口未划 VLAN）") == ""
+    assert clean_cell("该 VLAN 没有三层网段") == ""
+    assert clean_cell("—") == ""
+    assert clean_cell("?") == ""
+    assert clean_cell("10.10.0.50") == "10.10.0.50"

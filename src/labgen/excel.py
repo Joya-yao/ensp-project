@@ -40,10 +40,10 @@ def available() -> bool:
 
 
 def _rows_from_requirements(topo: Topology, req: Requirements):
-    from labgen.addresses import device_rows, terminal_rows
+    from labgen.addresses import clean_cell, device_rows, terminal_rows
 
-    devices = [list(row) for row in device_rows(req)]
-    terminals = [list(row) for row in terminal_rows(topo, req)]
+    devices = [[clean_cell(str(cell)) for cell in row] for row in device_rows(req)]
+    terminals = [[clean_cell(str(cell)) for cell in row] for row in terminal_rows(topo, req)]
     return devices, terminals
 
 

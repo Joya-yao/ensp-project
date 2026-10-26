@@ -209,8 +209,35 @@ def device_rows(req: Requirements) -> list[tuple[str, str, str, str, str, str, s
     return rows
 
 
-def terminal_rows(topo: Topology, req: Requirements) -> list[tuple[str, ...]]:
-    """PC 接在哪台交换机哪个口、属于哪个 VLAN、建议用哪个地址。"""
+PLACEHOLDER_PREFIXES = ("未识别", "该 VLAN", "地址已用完", "地址表未填")
+
+
+def clean_cell(value: str) -> str:
+    """把「说明性占位文字」当空值处理，别让它回流进地址表当数据。"""
+
+    text = (value or "").strip()
+    if text in ("", "—", "-", "?", "？"):
+        return ""
+    if text.startswith(PLACEHOLDER_PREFIXES):
+        return ""
+    return text
+
+
+def _infer_vlan(spec) -> int | None:
+    """PC 所接端口没写 VLAN 时推断：先看唯一 access VLAN，再看设备唯一的 VLAN。"""
+
+    if spec is None:
+        return None
+    access = {
+        iface.vlan for iface in spec.interfaces if iface.mode == "access" and iface.vlan
+    }
+    if len(access) == 1:
+        return access.pop()
+    declared = {vlan.id for vlan in spec.vlans}
+    if len(declared) == 1:
+        return declared.pop()
+    return None
+
 
 def terminal_rows(
     topo: Topology, req: Requirements, overrides: dict[str, dict] | None = None
@@ -252,13 +279,18 @@ def terminal_rows(
                     vlan = iface.vlan
                     break
 
-        given = overrides.get(device.name) or {}
-        given_ip = (given.get("IP") or "").strip()
-        given_gateway = (given.get("网关") or "").strip()
-        given_vlan = (given.get("VLAN") or "").strip()
-        given_mask = (given.get("掩码") or "").strip()
+        vlan_from_inference = False
+        if vlan is None:
+            vlan = _infer_vlan(spec)
+            vlan_from_inference = vlan is not None
 
-        if given_ip and given_ip not in ("?", "？", "—", "-"):
+        given = overrides.get(device.name) or {}
+        given_ip = clean_cell(given.get("IP", ""))
+        given_gateway = clean_cell(given.get("网关", ""))
+        given_vlan = clean_cell(given.get("VLAN", ""))
+        given_mask = clean_cell(given.get("掩码", ""))
+
+        if given_ip:
             vlan_text = given_vlan or (str(vlan) if vlan is not None else "—")
             mask_text = given_mask or "—"
             gateway_text = (
@@ -284,7 +316,10 @@ def terminal_rows(
 
         used.add(free)
         gateway, source = gateways.get(network, ("—", "需人工确认"))
-        gateway_text = f"{gateway}（{source}，地址表未填）"
+        suffix = "，地址表未填"
+        if vlan_from_inference:
+            suffix += "，VLAN 由交换机接入口推断"
+        gateway_text = f"{gateway}（{source}{suffix}）"
         rows.append((device.name, where, str(vlan), free, str(network.netmask), gateway_text))
 
     return rows
