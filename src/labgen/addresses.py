@@ -8,6 +8,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from labgen.requirements import Requirements
 from labgen.topo import Topology
@@ -21,6 +22,7 @@ __all__ = [
     "device_rows",
     "terminal_rows",
     "render_markdown",
+    "render_skeleton",
 ]
 
 
@@ -259,6 +261,77 @@ def terminal_rows(topo: Topology, req: Requirements) -> list[tuple[str, ...]]:
         rows.append((device.name, where, str(vlan), free, str(network.netmask), gateway_text))
 
     return rows
+
+
+def render_skeleton(topo: Topology, req: Requirements | None = None) -> str:
+    """只有拓扑、没有 YAML 时给的空白地址表，按连线列出待填的行。"""
+
+    title = Path(topo.source).stem if topo.source else "地址表"
+    parts: list[str] = [f"# {title} 地址表（待填写）", ""]
+
+    if topo.links:
+        parts.append("## 连线")
+        parts.append("")
+        rows = [
+            (link.src.device, link.src.port or "?", link.dst.device, link.dst.port or "?", link.cable)
+            for link in topo.links
+        ]
+        parts.append(_markdown_table(("设备 A", "接口 A", "设备 B", "接口 B", "线缆"), rows))
+        parts.append("")
+
+    parts.append("## 设备地址（把 ? 换成实际值）")
+    parts.append("")
+    rows = []
+    for device in topo.devices:
+        if device.device_type == "pc":
+            continue
+        connected = {
+            endpoint.port.lower()
+            for link in topo.links
+            for endpoint in (link.src, link.dst)
+            if endpoint.device == device.name and endpoint.port
+        }
+        for port in device.ports:
+            if port.name.lower() not in connected:
+                continue
+            rows.append((device.name, port.name, "?", "?", "?", "?", "—"))
+    if not rows:
+        rows.append(("—", "—", "?", "?", "?", "?", "拓扑里没有连线"))
+    parts.append(
+        _markdown_table(("设备", "接口", "IP", "掩码", "VLAN", "网关", "说明"), rows)
+    )
+    parts.append("")
+
+    terminals = [
+        (device.name, where)
+        for device in topo.devices
+        if device.device_type == "pc"
+        for where in [
+            next(
+                (
+                    f"{other.device}:{other.port}"
+                    for link in topo.links_of(device.name)
+                    for other in (link.dst if link.src.device == device.name else link.src,)
+                    if other.device != device.name
+                ),
+                "未连线",
+            )
+        ]
+    ]
+    if terminals:
+        parts.append("## 终端地址")
+        parts.append("")
+        parts.append(
+            _markdown_table(("终端", "接在", "VLAN", "IP", "掩码", "网关"), [
+                (name, where, "?", "?", "?", "?") for name, where in terminals
+            ])
+        )
+        parts.append("")
+
+    parts.append(
+        "填完这张表后，可以让 AI 按它生成 requirements.yaml，或照着写进 YAML 再点校验。"
+    )
+    return "\n".join(parts)
 
 
 def _markdown_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:

@@ -1,4 +1,4 @@
-﻿"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
+"""本地网页 UI：浏览器里操作，不需要 Node，也不需要打包。
 
 设计目标：
 - 只用标准库，仓库依赖不增加；
@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from labgen.addresses import render_markdown
+from labgen.addresses import render_markdown, render_skeleton
 from labgen.ai import AiConfig, AiError, convert_address_table, convert_requirements
 from labgen.docx_writer import write_docx
 from labgen.generators import build_configs
@@ -54,6 +54,15 @@ def _text(payload: dict, key: str, label: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{label} 必须是字符串，收到的是 {type(value).__name__}")
     return value.strip()
+
+
+def project_stem(topo_path: str) -> str:
+    """中间文件、最终产物统一用拓扑文件名做前缀，便于多项目区分。"""
+
+    if not topo_path:
+        return "项目"
+    stem = Path(topo_path).stem or "项目"
+    return SAFE_NAME.sub("_", stem)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -217,23 +226,33 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _handle_address_table(self, payload: dict) -> tuple[int, dict]:
-        try:
-            req = self._load_req(self._yaml_text(payload))
-        except RequirementError as exc:
-            return _error(HTTPStatus.BAD_REQUEST, str(exc))
+        yaml_text = _text(payload, "yaml", "要求 YAML")
+        topo_path = _text(payload, "topo", "拓扑路径")
 
         topo = None
-        topo_path = _text(payload, "topo", "拓扑路径")
         if topo_path:
             try:
                 topo = parse_topo(topo_path)
             except (FileNotFoundError, TopoError) as exc:
                 return _error(HTTPStatus.BAD_REQUEST, str(exc))
 
-        markdown = render_markdown(topo, req)
+        if yaml_text:
+            try:
+                req = self._load_req(yaml_text)
+            except RequirementError as exc:
+                return _error(HTTPStatus.BAD_REQUEST, str(exc))
+            markdown = render_markdown(topo, req)
+            mode = "yaml"
+        elif topo is not None:
+            markdown = render_skeleton(topo)
+            mode = "skeleton"
+        else:
+            raise ValueError("要么选一个 .topo（生成待填表），要么贴 YAML（生成真实地址表）")
 
+        stem = project_stem(topo_path)
         target = self._write_path(
-            _text(payload, "addr_path", "地址表路径"), "output/ui/work/addresses.md"
+            _text(payload, "addr_path", "地址表路径"),
+            f"output/ui/work/{stem}-addresses.md",
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(markdown, encoding="utf-8", newline="")
@@ -243,6 +262,8 @@ class Handler(BaseHTTPRequestHandler):
             "markdown": markdown,
             "saved": str(target),
             "name": target.name,
+            "mode": mode,
+            "stem": stem,
         }
 
     def _handle_generate(self, payload: dict) -> tuple[int, dict]:
@@ -257,9 +278,10 @@ class Handler(BaseHTTPRequestHandler):
 
         final_dir = self._user_dir(_text(payload, "final_dir", "最终目录"), self._final_dir(), "最终目录")
         final_dir.mkdir(parents=True, exist_ok=True)
+        stem = project_stem(topo_path)
 
         files: list[dict] = []
-        docx_path = final_dir / "配置文档.docx"
+        docx_path = final_dir / f"{stem}-配置文档.docx"
         try:
             write_docx(topo, req, configs, docx_path)
             files.append(
@@ -277,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
             chunks = chunk_commands(lines, 40)
             for index, chunk in enumerate(chunks, start=1):
                 suffix = "" if len(chunks) == 1 else f"-{index:02d}"
-                target = final_dir / f"{name}{suffix}.txt"
+                target = final_dir / f"{stem}-{name}{suffix}.txt"
                 target.write_text(
                     "\r\n".join(chunk) + "\r\n", encoding="utf-8", newline=""
                 )
@@ -294,6 +316,7 @@ class Handler(BaseHTTPRequestHandler):
             "final_dir": str(final_dir),
             "files": files,
             "devices": len(configs),
+            "stem": stem,
         }
 
     def _handle_upload(self, payload: dict) -> tuple[int, dict]:
@@ -678,6 +701,23 @@ function body(extra) {
 
 function clearArtifacts() { $("artifacts").innerHTML = ""; }
 
+function stemOf() {
+  const path = ($("topo").value || "").trim();
+  if (!path) return "";
+  const base = path.replace(/\\\\/g, "/").split("/").pop() || "";
+  return base.replace(/\\.[^.]+$/, "") || "";
+}
+
+function syncNames() {
+  const stem = stemOf();
+  if (!stem) return;
+  $("save-name").value = stem + "-requirements.yaml";
+  $("addr-path").value = "output/ui/work/" + stem + "-addresses.md";
+}
+
+$("topo").addEventListener("change", syncNames);
+$("topo").addEventListener("blur", syncNames);
+
 function addArtifacts(items) {
   const html = items.map(it => {
     const link = it.download === false ? "" :
@@ -704,6 +744,7 @@ async function uploadIfNeeded() {
   if (!r.ok) { show(r.error, "bad"); return false; }
   $("topo").value = r.path;
   $("topo-hint").textContent = "已上传：" + r.path;
+  syncNames();
   addArtifacts([{name: file.name, size: r.size, path: r.path, download: false}]);
   loadWork();
   return true;
@@ -753,7 +794,7 @@ async function loadWork() {
     a.onclick = async () => {
       const r2 = await getJSON("/api/read?path=" + encodeURIComponent(a.dataset.path));
       if (!r2.ok) return show(r2.error, "bad");
-      if (r2.path.endsWith(".topo")) { $("topo").value = r2.path; $("topo-hint").textContent = "已选拓扑：" + r2.path; }
+      if (r2.path.endsWith(".topo")) { $("topo").value = r2.path; $("topo-hint").textContent = "已选拓扑：" + r2.path; syncNames(); }
       else if (r2.path.endsWith(".md")) { $("addr").value = r2.content; $("addr-path").value = r2.path; show("已载入地址表：" + r2.path, "ok"); }
       else { $("yaml").value = r2.content; show("已载入：" + r2.path + "（改完点保存）", "ok"); }
     };
@@ -790,8 +831,11 @@ $("btn-addr").onclick = async () => {
     if (!r.ok) return show(r.error, "bad");
     $("addr").value = r.markdown;
     $("addr-path").value = r.saved;
-    $("addr-hint").textContent = "已生成：" + r.saved;
-    show(r.markdown + "\\n\\n—— 已保存到：\\n" + r.saved + "\\n（可在上方文本框修改后点「保存地址表」）");
+    $("addr-hint").textContent = (r.mode === "skeleton" ? "已按拓扑生成待填表：" : "已按 YAML 生成地址表：") + r.saved;
+    show(r.markdown + "\\n\\n—— 已保存到：\\n" + r.saved +
+      "\\n" + (r.mode === "skeleton"
+        ? "（这是按拓扑生成的待填表，把 ? 改成实际地址后点「保存地址表」）"
+        : "（可在上方文本框修改后点「保存地址表」）"));
     addArtifacts([{name: r.name, size: r.markdown.length, path: r.saved, download: true}]);
     loadWork();
   } finally { setBusy(false); }
@@ -803,7 +847,7 @@ $("btn-gen").onclick = async () => {
     if (!(await uploadIfNeeded())) return;
     const r = await call("/api/generate", body());
     if (!r.ok) return show(r.error, "bad");
-    show(`生成完成：${r.devices} 台设备\\n最终目录：${r.final_dir}\\n共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
+    show(`生成完成：${r.devices} 台设备\\n前缀：${r.stem}\\n最终目录：${r.final_dir}\\n共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
     addArtifacts(r.files);
   } finally { setBusy(false); }
 };

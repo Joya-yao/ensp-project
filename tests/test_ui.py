@@ -116,12 +116,35 @@ def test_address_table_saves_markdown_to_work(server, tmp_path):
     )
     assert data["ok"] is True
     assert "## 网段与网关" in data["markdown"]
-    saved = tmp_path / "output" / "ui" / "work" / "addresses.md"
+    # 文件名带拓扑前缀，便于多项目区分
+    assert data["stem"] == "lab01"
+    assert data["name"] == "lab01-addresses.md"
+    saved = tmp_path / "output" / "ui" / "work" / "lab01-addresses.md"
     assert saved.is_file()
     assert "10.10.0.254" in saved.read_text(encoding="utf-8")
-    # 前端要能显示到底写到哪了
     assert data["saved"] == str(saved.resolve())
-    assert data["name"] == "addresses.md"
+    assert data["mode"] == "yaml"
+
+
+def test_address_table_skeleton_without_yaml(server, tmp_path):
+    srv, url = server
+    status, data = _post(
+        url,
+        "/api/address-table",
+        {"yaml": "", "topo": str(LAB / "lab01.topo"), "work_dir": "output/ui/work"},
+    )
+    assert data["ok"] is True, data
+    assert data["mode"] == "skeleton"
+    assert "待填写" in data["markdown"]
+    assert "| LSW1 |" in data["markdown"]
+    assert (tmp_path / "output" / "ui" / "work" / "lab01-addresses.md").is_file()
+
+
+def test_address_table_requires_topo_or_yaml(server):
+    srv, url = server
+    status, data = _post(url, "/api/address-table", {"yaml": "", "topo": ""})
+    assert status == 400
+    assert ".topo" in data["error"]
 
 
 def test_address_table_honours_custom_path(server, tmp_path):
@@ -214,8 +237,9 @@ def test_generate_writes_into_final_dir(server, tmp_path):
     )
     assert data["ok"] is True, data
     names = {item["name"] for item in data["files"]}
-    assert "LSW1.txt" in names
-    assert (tmp_path / "output" / "ui" / "final" / "LSW1.txt").is_file()
+    assert "lab01-LSW1.txt" in names
+    assert "lab01-配置文档.docx" in names
+    assert (tmp_path / "output" / "ui" / "final" / "lab01-LSW1.txt").is_file()
     # 每个文件都要带绝对路径，页面才能显示「生成到哪了」
     for item in data["files"]:
         assert Path(item["path"]).is_absolute()
