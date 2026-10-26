@@ -26,7 +26,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from labgen import excel
 from labgen.addresses import render_markdown, render_skeleton
@@ -118,13 +118,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if self.headers.get("X-Token") != self.token:
-            self._send_json(*_error(HTTPStatus.FORBIDDEN, "token 不对，刷新页面重试"))
-            return
+        # 先读完请求体再回错误：不然客户端还在写 body 时连接被关，浏览器会报
+        # 「软件中止了一个已建立的连接」这类莫名其妙的错误
         try:
             payload = self._read_json()
         except ValueError as exc:
             self._send_json(*_error(HTTPStatus.BAD_REQUEST, str(exc)))
+            return
+
+        if self.headers.get("X-Token") != self.token:
+            self._send_json(*_error(HTTPStatus.FORBIDDEN, "token 不对，刷新页面重试"))
             return
 
         routes = {
@@ -305,6 +308,7 @@ class Handler(BaseHTTPRequestHandler):
 
             # 地址表 xlsx 存在就以它为准（用户在 Excel 里改过的地址/VLAN 覆盖 YAML）
             applied = None
+            terminal_map: dict[str, dict] = {}
             if excel.available():
                 addr_path = _text(payload, "addr_path", "地址表路径")
                 candidate = Path(addr_path) if addr_path else (
@@ -316,6 +320,11 @@ class Handler(BaseHTTPRequestHandler):
                 if candidate.suffix.lower() == ".xlsx" and candidate.is_file():
                     sheet = excel.read_address_xlsx(candidate)
                     req = excel.apply_overrides(req, sheet)
+                    terminal_map = {
+                        row.get("终端", ""): row
+                        for row in sheet.get("terminals", [])
+                        if row.get("终端")
+                    }
                     applied = str(candidate)
 
             configs = build_configs(topo, req)
@@ -329,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
         files: list[dict] = []
         docx_path = final_dir / f"{stem}-配置文档.docx"
         try:
-            write_docx(topo, req, configs, docx_path)
+            write_docx(topo, req, configs, docx_path, terminal_map)
             files.append(
                 {
                     "name": docx_path.name,
@@ -535,7 +544,12 @@ class Handler(BaseHTTPRequestHandler):
         }.get(target.suffix.lower(), "application/octet-stream")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+        # 头里不能直接放中文：给 ASCII 兜底名 + RFC 5987 的 UTF-8 名
+        ascii_name = re.sub(r"[^\x20-\x7E]", "_", target.name)
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(target.name)}",
+        )
         self.end_headers()
         self.wfile.write(data)
 
@@ -803,12 +817,17 @@ function addArtifacts(items) {
       <div class="line"><span>${it.name}</span><span class="muted">${it.size} B</span></div>
       <span class="path">${it.path}</span>
       <div class="line"><span></span><span>
-        <a href="${open}" target="_blank">打开</a> ·
+        <a data-open="${it.path}">打开</a> ·
         <a href="${download}">下载</a>
       </span></div>
     </li>`;
   }).join("");
   $("artifacts").innerHTML = html + $("artifacts").innerHTML;
+  $("artifacts").querySelectorAll("a[data-open]").forEach(a => {
+    if (a.dataset.bound) return;
+    a.dataset.bound = "1";
+    a.onclick = (event) => { event.preventDefault(); openPath(a.dataset.open); };
+  });
 }
 
 function openPath(path, label) {

@@ -356,6 +356,24 @@ def test_download_rejects_path_outside_output(server):
     assert exc.value.code == 403
 
 
+def test_download_sets_utf8_filename_for_chinese_names(server, tmp_path):
+    """Content-Disposition 里不能塞原始中文，要给 filename* 的 UTF-8 形式。"""
+
+    srv, url = server
+    target = tmp_path / "output" / "ui" / "final" / "lab01-配置文档.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("hello", encoding="utf-8")
+
+    with urllib.request.urlopen(
+        url.split("/?")[0] + "/api/file?path=" + quote(str(target), safe=""), timeout=5
+    ) as response:
+        assert response.status == 200
+        disposition = response.headers.get("Content-Disposition")
+        assert "filename*=UTF-8''" in disposition
+        assert "%E9%85%8D%E7%BD%AE" in disposition  # 「配置」的 UTF-8 编码
+        assert response.read() == b"hello"
+
+
 def test_open_rejects_path_outside_output(server):
     srv, url = server
     status, data = _get(url, "/api/open?path=" + quote(str(LAB / "lab01.topo"), safe=""))

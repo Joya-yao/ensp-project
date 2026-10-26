@@ -212,6 +212,16 @@ def device_rows(req: Requirements) -> list[tuple[str, str, str, str, str, str, s
 def terminal_rows(topo: Topology, req: Requirements) -> list[tuple[str, ...]]:
     """PC 接在哪台交换机哪个口、属于哪个 VLAN、建议用哪个地址。"""
 
+def terminal_rows(
+    topo: Topology, req: Requirements, overrides: dict[str, dict] | None = None
+) -> list[tuple[str, ...]]:
+    """PC 接在哪台交换机哪个口、属于哪个 VLAN、建议用哪个地址。
+
+    ``overrides`` 是地址表里填好的终端行（键为终端名），填了的以它为准，
+    没填的按所接端口的 VLAN 自动建议，并在网关列标出来源。
+    """
+
+    overrides = overrides or {}
     entries = address_entries(req)
     gateways = gateway_map(req, entries)
     networks = vlan_networks(entries)
@@ -241,6 +251,23 @@ def terminal_rows(topo: Topology, req: Requirements) -> list[tuple[str, ...]]:
                 if iface.name.lower() == (peer_port or "").lower():
                     vlan = iface.vlan
                     break
+
+        given = overrides.get(device.name) or {}
+        given_ip = (given.get("IP") or "").strip()
+        given_gateway = (given.get("网关") or "").strip()
+        given_vlan = (given.get("VLAN") or "").strip()
+        given_mask = (given.get("掩码") or "").strip()
+
+        if given_ip and given_ip not in ("?", "？", "—", "-"):
+            vlan_text = given_vlan or (str(vlan) if vlan is not None else "—")
+            mask_text = given_mask or "—"
+            gateway_text = (
+                f"{given_gateway}（地址表）" if given_gateway else "（地址表未填网关）"
+            )
+            rows.append((device.name, where, vlan_text, given_ip, mask_text, gateway_text))
+            used.add(given_ip)
+            continue
+
         if vlan is None:
             rows.append((device.name, where, "—", "未识别（端口未划 VLAN）", "—", "—"))
             continue
@@ -256,8 +283,8 @@ def terminal_rows(topo: Topology, req: Requirements) -> list[tuple[str, ...]]:
             continue
 
         used.add(free)
-        gateway, source = gateways.get(network, ("—", ""))
-        gateway_text = f"{gateway}（{source}）" if gateway != "—" else "—"
+        gateway, source = gateways.get(network, ("—", "需人工确认"))
+        gateway_text = f"{gateway}（{source}，地址表未填）"
         rows.append((device.name, where, str(vlan), free, str(network.netmask), gateway_text))
 
     return rows
@@ -341,7 +368,11 @@ def _markdown_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> st
     return "\n".join(lines)
 
 
-def render_markdown(topo: Topology | None, req: Requirements) -> str:
+def render_markdown(
+    topo: Topology | None,
+    req: Requirements,
+    overrides: dict[str, dict] | None = None,
+) -> str:
     """给人确认的 Markdown 表格：网段、每台设备地址、终端建议地址。"""
 
     parts: list[str] = [f"# {req.experiment or '地址与网关'}"]
@@ -372,9 +403,14 @@ def render_markdown(topo: Topology | None, req: Requirements) -> str:
         parts.append("")
 
     if topo is not None:
-        terminals = terminal_rows(topo, req)
+        terminals = terminal_rows(topo, req, overrides)
         if terminals:
             parts.append("## 终端建议地址")
+            parts.append("")
+            parts.append(
+                "地址表里填了 IP 的终端以地址表为准（网关列标「地址表」）；"
+                "没填的按所接端口的 VLAN 自动取号，并在网关列标「地址表未填」。"
+            )
             parts.append("")
             parts.append(
                 _markdown_table(

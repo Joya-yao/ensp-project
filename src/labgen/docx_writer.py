@@ -116,7 +116,7 @@ def _note(doc: Document, text: str) -> None:
     paragraph.runs[0].font.size = Pt(9)
 
 
-def _address_section(doc: Document, topo: Topology, req: Requirements) -> None:
+def _address_section(doc: Document, topo: Topology, req: Requirements, terminal_overrides: dict[str, dict] | None = None) -> None:
     if not address_entries(req):
         return
 
@@ -144,13 +144,16 @@ def _address_section(doc: Document, topo: Topology, req: Requirements) -> None:
             doc, ("设备", "接口", "IP", "掩码", "VLAN", "网关", "说明"), devices
         )
 
-    terminals = terminal_rows(topo, req)
+    terminals = terminal_rows(topo, req, terminal_overrides)
     if terminals:
         doc.add_heading("终端建议地址", level=2)
+        filled = sum(1 for row in terminals if "（地址表）" in row[5])
         _note(
             doc,
-            "按拓扑连线自动推出 PC 挂在哪台交换机的哪个口、属于哪个 VLAN，"
-            "并从该 VLAN 网段里按顺序取第一个空地址。粘之前可改，别跟已有设备撞。",
+            "终端（PC 等边缘设备）跑在接入端口的 VLAN 里，地址必须落在该 VLAN 网段内。"
+            f"本表 {len(terminals)} 台终端，其中 {filled} 台地址来自地址表，"
+            f"其余 {len(terminals) - filled} 台是地址表没填、按所接端口的 VLAN 自动建议的"
+            "（网关列标「地址表未填」）。要改地址，改地址表里对应终端那一行再重新生成。",
         )
         _add_table(doc, ("终端", "接在", "VLAN", "建议 IP", "掩码", "网关"), terminals)
 
@@ -164,7 +167,10 @@ def _address_section(doc: Document, topo: Topology, req: Requirements) -> None:
 
 
 def build_document(
-    topo: Topology, req: Requirements, configs: dict[str, list[str]]
+    topo: Topology,
+    req: Requirements,
+    configs: dict[str, list[str]],
+    terminal_overrides: dict[str, dict] | None = None,
 ) -> Document:
     """构建文档对象；不写盘，便于测试。"""
 
@@ -198,7 +204,7 @@ def build_document(
     doc.add_heading("连线", level=2)
     _link_table(doc, topo)
 
-    _address_section(doc, topo, req)
+    _address_section(doc, topo, req, terminal_overrides)
 
     if topo.warnings:
         doc.add_heading("解析告警", level=2)
@@ -245,11 +251,15 @@ def build_document(
 
 
 def write_docx(
-    topo: Topology, req: Requirements, configs: dict[str, list[str]], path: str | Path
+    topo: Topology,
+    req: Requirements,
+    configs: dict[str, list[str]],
+    path: str | Path,
+    terminal_overrides: dict[str, dict] | None = None,
 ) -> Path:
     """构建并写盘，返回实际路径。"""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    build_document(topo, req, configs).save(path)
+    build_document(topo, req, configs, terminal_overrides).save(path)
     return path

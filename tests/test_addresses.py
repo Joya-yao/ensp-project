@@ -85,6 +85,33 @@ def test_network_rows_count_free_terminal_addresses():
     assert row[5].startswith("10.10.0.1 ~ 10.10.0.253")
 
 
+def test_terminal_overrides_win_over_suggestion():
+    """地址表里填了终端的 IP，就以地址表为准，并标明来源。"""
+
+    topo = parse_topo(LABS / "lab01.topo")
+    req = load_requirements(LABS / "lab01-vlan.yaml")
+    rows = {
+        row[0]: row
+        for row in terminal_rows(
+            topo,
+            req,
+            {
+                "PC1": {
+                    "IP": "10.10.0.50",
+                    "掩码": "255.255.255.0",
+                    "VLAN": "10",
+                    "网关": "10.10.0.254",
+                }
+            },
+        )
+    }
+    assert rows["PC1"][3] == "10.10.0.50"
+    assert "地址表" in rows["PC1"][5]
+    # 没填的仍然自动建议，并标注地址表未填
+    assert rows["PC2"][3] == "10.20.0.1"
+    assert "地址表未填" in rows["PC2"][5]
+
+
 def test_terminal_rows_follow_access_vlan():
     topo = parse_topo(LABS / "lab01.topo")
     req = load_requirements(LABS / "lab01-vlan.yaml")
