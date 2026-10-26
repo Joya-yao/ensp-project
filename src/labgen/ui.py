@@ -3,7 +3,8 @@
 设计目标：
 - 只用标准库，仓库依赖不增加；
 - 只监听 127.0.0.1，并带一次性 token，别的进程偷不到接口；
-- 生成的文件只写到用户指定的输出目录，下载接口不能越界读文件。
+- 读：只允许读项目目录内；写：只允许写项目 ``output/`` 内；
+- 上传的拓扑、草稿 YAML、地址表放「中间目录」，最终 docx/txt 放「最终目录」，两者都由用户指定（限 output/ 下）。
 
 想变成独立窗口时，装 ``pywebview`` 后运行 ``run.py --ui --window``，
 没装就自动退回浏览器，不影响使用。
@@ -11,7 +12,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import re
 import secrets
 import sys
 import tempfile
@@ -23,6 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from labgen.addresses import render_markdown
+from labgen.ai import AiConfig, AiError, convert_address_table, convert_requirements
 from labgen.docx_writer import write_docx
 from labgen.generators import build_configs
 from labgen.pastestyle import chunk_commands, to_safe_paste
@@ -31,7 +36,9 @@ from labgen.topo import TopoError, parse_topo
 
 __all__ = ["serve", "make_server"]
 
-MAX_BODY = 2 * 1024 * 1024  # 2 MB，够放几千行 YAML
+MAX_BODY = 8 * 1024 * 1024  # 8 MB：够放一个几 MB 的 .topo 的 base64
+TEXT_SUFFIXES = {".yaml", ".yml", ".md", ".txt", ".json", ".topo"}
+SAFE_NAME = re.compile(r"[^\w.\-]+", re.UNICODE)
 
 
 def _error(status: int, message: str) -> tuple[int, dict]:
@@ -52,24 +59,43 @@ def _text(payload: dict, key: str, label: str) -> str:
 class Handler(BaseHTTPRequestHandler):
     server_version = "ensp-labgen-ui"
 
-    # 由 make_server 注入
     token: str = ""
-    out_dir: Path = Path("output/ui")
-    root: Path | None = None
+    root: Path = Path(".").resolve()
+    work: Path = Path("output/ui/work")
+    final: Path = Path("output/ui/final")
 
-    def log_message(self, fmt: str, *args) -> None:  # 安静一点
+    # ---------- 基础 ----------
+
+    def log_message(self, fmt: str, *args) -> None:
         if "--verbose" in sys.argv:
             super().log_message(fmt, *args)
+
+    def _output_dir(self) -> Path:
+        return (self.root / "output").resolve()
+
+    def _work_dir(self) -> Path:
+        return self.work.resolve()
+
+    def _final_dir(self) -> Path:
+        return self.final.resolve()
 
     # ---------- 路由 ----------
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
         if parsed.path in ("/", "/index.html"):
             self._send_html(PAGE)
             return
         if parsed.path == "/api/file":
-            self._handle_file(parsed)
+            self._download(query)
+            return
+        if parsed.path == "/api/read":
+            self._read_file(query)
+            return
+        if parsed.path == "/api/list":
+            self._list_dir(query)
             return
         self._send_json(*_error(HTTPStatus.NOT_FOUND, "没有这个地址"))
 
@@ -89,6 +115,9 @@ class Handler(BaseHTTPRequestHandler):
             "/api/validate": self._handle_validate,
             "/api/address-table": self._handle_address_table,
             "/api/generate": self._handle_generate,
+            "/api/upload": self._handle_upload,
+            "/api/save": self._handle_save,
+            "/api/ai-convert": self._handle_ai,
         }
         handler = routes.get(parsed.path)
         if handler is None:
@@ -99,14 +128,53 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_json(*_error(HTTPStatus.BAD_REQUEST, str(exc)))
 
+    # ---------- 路径守卫 ----------
+
+    def _inside(self, path: Path, base: Path) -> bool:
+        path = path.resolve()
+        base = base.resolve()
+        return path == base or base in path.parents
+
+    def _user_dir(self, value: str, default: Path, label: str) -> Path:
+        """把用户填的目录解析成绝对路径，必须落在 output/ 下。"""
+
+        raw = value.strip() or str(default.relative_to(self.root))
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        resolved = candidate.resolve()
+        if not self._inside(resolved, self._output_dir()):
+            raise ValueError(f"{label}必须位于项目的 output/ 目录下，例：output/ui/work")
+        return resolved
+
     # ---------- 业务 ----------
 
-    def _handle_summary(self, payload: dict) -> tuple[int, dict]:
+    def _yaml_text(self, payload: dict) -> str:
+        text = _text(payload, "yaml", "要求 YAML")
+        if not text:
+            raise ValueError("先把要求 YAML 贴进来")
+        return text
+
+    def _load_req(self, yaml_text: str):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write(yaml_text)
+            path = fh.name
+        try:
+            return load_requirements(path)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def _topo_path(self, payload: dict) -> str:
         topo_path = _text(payload, "topo", "拓扑路径")
         if not topo_path:
-            return _error(HTTPStatus.BAD_REQUEST, "先填拓扑文件路径")
+            raise ValueError("先选一个 .topo 文件，或填它的路径")
+        return topo_path
+
+    def _handle_summary(self, payload: dict) -> tuple[int, dict]:
         try:
-            topo = parse_topo(topo_path)
+            topo = parse_topo(self._topo_path(payload))
         except (FileNotFoundError, TopoError) as exc:
             return _error(HTTPStatus.BAD_REQUEST, str(exc))
         return HTTPStatus.OK, {
@@ -120,11 +188,8 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _handle_validate(self, payload: dict) -> tuple[int, dict]:
-        yaml_text = _text(payload, "yaml", "要求 YAML")
-        if not yaml_text.strip():
-            return _error(HTTPStatus.BAD_REQUEST, "先把要求 YAML 贴进来")
         try:
-            req = self._load_req_text(yaml_text)
+            req = self._load_req(self._yaml_text(payload))
         except RequirementError as exc:
             return _error(HTTPStatus.BAD_REQUEST, str(exc))
         return HTTPStatus.OK, {
@@ -132,17 +197,14 @@ class Handler(BaseHTTPRequestHandler):
             "experiment": req.experiment,
             "devices": list(req.devices),
             "acls": len(req.acls),
-            "has_bgp": req.bgp is not None,
-            "has_rip": req.rip is not None,
             "nats": len(req.nats),
+            "has_rip": req.rip is not None,
+            "has_bgp": req.bgp is not None,
         }
 
     def _handle_address_table(self, payload: dict) -> tuple[int, dict]:
-        yaml_text = _text(payload, "yaml", "要求 YAML")
-        if not yaml_text.strip():
-            return _error(HTTPStatus.BAD_REQUEST, "先把要求 YAML 贴进来")
         try:
-            req = self._load_req_text(yaml_text)
+            req = self._load_req(self._yaml_text(payload))
         except RequirementError as exc:
             return _error(HTTPStatus.BAD_REQUEST, str(exc))
 
@@ -153,36 +215,36 @@ class Handler(BaseHTTPRequestHandler):
                 topo = parse_topo(topo_path)
             except (FileNotFoundError, TopoError) as exc:
                 return _error(HTTPStatus.BAD_REQUEST, str(exc))
-        return HTTPStatus.OK, {"ok": True, "markdown": render_markdown(topo, req)}
+
+        markdown = render_markdown(topo, req)
+
+        saved = None
+        try:
+            work = self._user_dir(_text(payload, "work_dir", "中间目录"), self._work_dir(), "中间目录")
+            work.mkdir(parents=True, exist_ok=True)
+            target = work / "addresses.md"
+            target.write_text(markdown, encoding="utf-8", newline="")
+            saved = str(target)
+        except (ValueError, OSError):
+            pass  # 保存失败不影响展示
+
+        return HTTPStatus.OK, {"ok": True, "markdown": markdown, "saved": saved}
 
     def _handle_generate(self, payload: dict) -> tuple[int, dict]:
-        topo_path = _text(payload, "topo", "拓扑路径")
-        yaml_text = _text(payload, "yaml", "要求 YAML")
-        if not topo_path:
-            return _error(HTTPStatus.BAD_REQUEST, "先填拓扑文件路径")
-        if not yaml_text.strip():
-            return _error(HTTPStatus.BAD_REQUEST, "先把要求 YAML 贴进来")
-
         try:
-            req = self._load_req_text(yaml_text)
-        except RequirementError as exc:
-            return _error(HTTPStatus.BAD_REQUEST, str(exc))
-        try:
+            yaml_text = self._yaml_text(payload)
+            topo_path = self._topo_path(payload)
+            req = self._load_req(yaml_text)
             topo = parse_topo(topo_path)
             configs = build_configs(topo, req)
         except (FileNotFoundError, TopoError, RequirementError) as exc:
             return _error(HTTPStatus.BAD_REQUEST, str(exc))
 
-        out_dir = self._try_out_dir(_text(payload, "out_dir", "输出目录") or None)
-        if out_dir is None:
-            return _error(
-                HTTPStatus.BAD_REQUEST,
-                "输出目录必须位于项目的 output/ 目录下，例：output/ui",
-            )
-        out_dir.mkdir(parents=True, exist_ok=True)
+        final_dir = self._user_dir(_text(payload, "final_dir", "最终目录"), self._final_dir(), "最终目录")
+        final_dir.mkdir(parents=True, exist_ok=True)
 
         files: list[dict] = []
-        docx_path = out_dir / "配置文档.docx"
+        docx_path = final_dir / "配置文档.docx"
         try:
             write_docx(topo, req, configs, docx_path)
             files.append({"name": docx_path.name, "size": docx_path.stat().st_size})
@@ -194,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
             chunks = chunk_commands(lines, 40)
             for index, chunk in enumerate(chunks, start=1):
                 suffix = "" if len(chunks) == 1 else f"-{index:02d}"
-                target = out_dir / f"{name}{suffix}.txt"
+                target = final_dir / f"{name}{suffix}.txt"
                 target.write_text(
                     "\r\n".join(chunk) + "\r\n", encoding="utf-8", newline=""
                 )
@@ -202,56 +264,138 @@ class Handler(BaseHTTPRequestHandler):
 
         return HTTPStatus.OK, {
             "ok": True,
-            "out_dir": str(out_dir),
+            "final_dir": str(final_dir),
             "files": files,
             "devices": len(configs),
         }
 
-    # ---------- 工具 ----------
-
-    def _load_req_text(self, yaml_text: str):
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".yaml", delete=False, encoding="utf-8"
-        ) as fh:
-            fh.write(yaml_text)
-            path = fh.name
+    def _handle_upload(self, payload: dict) -> tuple[int, dict]:
+        name = _text(payload, "name", "文件名")
+        if not name:
+            raise ValueError("缺少文件名")
+        data_b64 = payload.get("data")
+        if not isinstance(data_b64, str) or not data_b64:
+            raise ValueError("缺少文件内容")
         try:
-            return load_requirements(path)
-        finally:
-            Path(path).unlink(missing_ok=True)
+            raw = base64.b64decode(data_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("文件内容不是合法 base64") from exc
 
-    def _try_out_dir(self, value: str | None) -> Path | None:
-        try:
-            return self._resolve_out_dir(value)
-        except ValueError:
-            return None
+        work = self._user_dir(_text(payload, "work_dir", "中间目录"), self._work_dir(), "中间目录")
+        work.mkdir(parents=True, exist_ok=True)
+        safe = SAFE_NAME.sub("_", Path(name).name) or "uploaded.topo"
+        target = work / safe
+        target.write_bytes(raw)
+        return HTTPStatus.OK, {"ok": True, "path": str(target), "size": len(raw)}
 
-    def _resolve_out_dir(self, value: str | None) -> Path:
-        root = (self.root or Path.cwd()).resolve()
-        allowed = (root / "output").resolve()
-        if not value or not value.strip():
-            return self.out_dir
-        candidate = Path(value.strip())
+    def _handle_save(self, payload: dict) -> tuple[int, dict]:
+        relative = _text(payload, "path", "保存路径")
+        content = payload.get("content")
+        if not relative:
+            raise ValueError("缺少保存路径")
+        if not isinstance(content, str):
+            raise ValueError("content 必须是字符串")
+
+        candidate = Path(relative)
         if not candidate.is_absolute():
-            candidate = root / candidate
+            candidate = self.root / candidate
         resolved = candidate.resolve()
-        if resolved != allowed and allowed not in resolved.parents:
-            # 拒绝写到项目 output 之外，避免误覆盖系统文件
-            raise ValueError(f"输出目录必须位于 {allowed} 下")
-        return resolved
+        if not self._inside(resolved, self._output_dir()):
+            raise ValueError("只能保存到项目的 output/ 目录下")
+        if resolved.suffix.lower() not in TEXT_SUFFIXES:
+            raise ValueError(f"只允许保存这些类型：{'、'.join(sorted(TEXT_SUFFIXES))}")
 
-    def _handle_file(self, parsed) -> None:
-        query = parse_qs(parsed.query)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content, encoding="utf-8", newline="")
+        return HTTPStatus.OK, {"ok": True, "path": str(resolved)}
+
+    def _handle_ai(self, payload: dict) -> tuple[int, dict]:
+        text = _text(payload, "text", "要求原文")
+        if not text:
+            raise ValueError("先把 PDF/Word 里的要求原文贴进来")
+
+        provider = _text(payload, "provider", "provider") or "cloud"
+        if provider not in ("local", "cloud"):
+            raise ValueError("provider 只能是 local 或 cloud")
+        base_url = _text(payload, "base_url", "base_url")
+        model = _text(payload, "model", "model")
+        api_key = _text(payload, "api_key", "api_key")
+        if not base_url or not model:
+            raise ValueError("base_url 和 model 都要填")
+        if provider == "cloud" and not api_key:
+            raise ValueError("云端模式缺 api_key：填在页面里，或改用本地模型")
+
+        mode = _text(payload, "mode", "mode") or "yaml"
+        if mode not in ("yaml", "table"):
+            raise ValueError("mode 只能是 yaml 或 table")
+
+        config = AiConfig(
+            provider=provider, base_url=base_url, model=model, api_key=api_key
+        )
+        try:
+            if mode == "table":
+                content = convert_address_table(config, text)
+            else:
+                content = convert_requirements(config, text)
+        except AiError as exc:
+            return _error(HTTPStatus.BAD_REQUEST, str(exc))
+        return HTTPStatus.OK, {"ok": True, "content": content}
+
+    # ---------- 读写文件 ----------
+
+    def _read_file(self, query) -> None:
         raw = (query.get("path") or [""])[0]
         if not raw:
             self._send_json(*_error(HTTPStatus.BAD_REQUEST, "缺少 path"))
             return
+        target = Path(raw)
+        if not target.is_absolute():
+            target = self.root / target
+        target = target.resolve()
+        if not self._inside(target, self.root):
+            self._send_json(*_error(HTTPStatus.FORBIDDEN, "只能读项目目录内的文件"))
+            return
+        if not target.is_file():
+            self._send_json(*_error(HTTPStatus.NOT_FOUND, "文件不存在"))
+            return
+        if target.suffix.lower() not in TEXT_SUFFIXES:
+            self._send_json(*_error(HTTPStatus.BAD_REQUEST, "这个类型不支持在线查看"))
+            return
         try:
-            target = Path(raw).resolve()
-            allowed = (self.root or Path.cwd()).resolve() / "output"
-            if allowed.resolve() not in target.parents:
-                raise ValueError
-        except (ValueError, OSError):
+            content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = target.read_text(encoding="gb18030", errors="replace")
+        self._send_json(HTTPStatus.OK, {"ok": True, "path": str(target), "content": content})
+
+    def _list_dir(self, query) -> None:
+        raw = (query.get("dir") or [""])[0]
+        base = Path(raw) if raw else self.root / "output" / "ui" / "work"
+        if not base.is_absolute():
+            base = self.root / base
+        base = base.resolve()
+        if not self._inside(base, self.root):
+            self._send_json(*_error(HTTPStatus.FORBIDDEN, "只能列项目目录内的文件"))
+            return
+        if not base.is_dir():
+            self._send_json(HTTPStatus.OK, {"ok": True, "dir": str(base), "files": []})
+            return
+        files = []
+        for item in sorted(base.iterdir()):
+            if not item.is_file() or item.suffix.lower() not in TEXT_SUFFIXES:
+                continue
+            files.append({"name": item.name, "size": item.stat().st_size, "path": str(item)})
+        self._send_json(HTTPStatus.OK, {"ok": True, "dir": str(base), "files": files})
+
+    def _download(self, query) -> None:
+        raw = (query.get("path") or [""])[0]
+        if not raw:
+            self._send_json(*_error(HTTPStatus.BAD_REQUEST, "缺少 path"))
+            return
+        target = Path(raw)
+        if not target.is_absolute():
+            target = self.root / target
+        target = target.resolve()
+        if not self._inside(target, self._output_dir()):
             self._send_json(*_error(HTTPStatus.FORBIDDEN, "只能下载 output 目录里的文件"))
             return
         if not target.is_file():
@@ -260,17 +404,18 @@ class Handler(BaseHTTPRequestHandler):
 
         data = target.read_bytes()
         self.send_response(HTTPStatus.OK)
-        suffix = target.suffix.lower()
         ctype = {
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".txt": "text/plain; charset=utf-8",
             ".md": "text/markdown; charset=utf-8",
-        }.get(suffix, "application/octet-stream")
+        }.get(target.suffix.lower(), "application/octet-stream")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
         self.end_headers()
         self.wfile.write(data)
+
+    # ---------- HTTP 工具 ----------
 
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -305,7 +450,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(
-    port: int = 0, *, root: Path | None = None, out_dir: Path | None = None
+    port: int = 0,
+    *,
+    root: Path | None = None,
+    work: Path | None = None,
+    final: Path | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
     """起一个服务，返回 (server, 访问地址)。port=0 时由系统分配。"""
 
@@ -315,8 +464,9 @@ def make_server(
         (Handler,),
         {
             "token": secrets.token_urlsafe(16),
-            "out_dir": (out_dir or root / "output" / "ui").resolve(),
             "root": root,
+            "work": (work or root / "output" / "ui" / "work").resolve(),
+            "final": (final or root / "output" / "ui" / "final").resolve(),
         },
     )
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
@@ -337,7 +487,7 @@ def serve(port: int = 8765, *, open_browser: bool = True, window: bool = False) 
 
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            webview.create_window("eNSP 配置生成器", url, width=1100, height=800)
+            webview.create_window("eNSP 配置生成器", url, width=1180, height=860)
             webview.start()
             server.shutdown()
             return 0
@@ -358,17 +508,6 @@ def serve(port: int = 8765, *, open_browser: bool = True, window: bool = False) 
     return 0
 
 
-def _port_free(port: int) -> bool:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            return False
-    return True
-
-
 PAGE = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -378,23 +517,28 @@ PAGE = """<!doctype html>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1115; color: #e6e6e6; }
-  header { padding: 14px 20px; border-bottom: 1px solid #23262d; display: flex; gap: 12px; align-items: baseline; }
+  header { padding: 12px 20px; border-bottom: 1px solid #23262d; display: flex; gap: 12px; align-items: baseline; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header span { color: #8b93a1; font-size: 12px; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 20px 40px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  main { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; padding: 16px 20px 40px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  section { min-width: 0; }
   label { display: block; font-size: 12px; color: #9aa3b2; margin: 10px 0 4px; }
-  input, textarea { width: 100%; background: #161a21; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 8px 10px; font: inherit; }
-  textarea { min-height: 380px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.5; resize: vertical; }
+  input, textarea, select { width: 100%; background: #161a21; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 8px 10px; font: inherit; }
+  textarea { min-height: 300px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.5; resize: vertical; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .row input { flex: 1 1 160px; width: auto; }
   button { background: #2b6cf6; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
   button.ghost { background: #1e232c; color: #c8cfdb; border: 1px solid #2a2f3a; }
   button:disabled { opacity: .55; cursor: progress; }
-  pre { background: #12151b; border: 1px solid #23262d; border-radius: 8px; padding: 12px; overflow: auto; max-height: 520px; font-size: 12.5px; }
+  pre { background: #12151b; border: 1px solid #23262d; border-radius: 8px; padding: 12px; overflow: auto; max-height: 420px; font-size: 12.5px; white-space: pre-wrap; }
   .ok { color: #4ade80; } .bad { color: #f87171; } .muted { color: #8b93a1; }
-  ul.files { list-style: none; padding: 0; margin: 8px 0 0; }
+  details { border: 1px solid #23262d; border-radius: 8px; padding: 8px 12px; margin-top: 12px; }
+  summary { cursor: pointer; color: #c8cfdb; }
+  ul.files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow: auto; }
   ul.files li { padding: 4px 0; border-bottom: 1px dashed #23262d; display: flex; justify-content: space-between; gap: 10px; }
-  a { color: #7aa7ff; }
+  a { color: #7aa7ff; cursor: pointer; }
+  .hint { font-size: 12px; color: #8b93a1; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -404,22 +548,64 @@ PAGE = """<!doctype html>
 </header>
 <main>
   <section>
-    <label>拓扑文件（.topo 完整路径）</label>
-    <input id="topo" placeholder="C:\\path\\lab.topo">
-    <label>要求 YAML</label>
-    <textarea id="yaml" placeholder="把 requirements.yaml 的内容贴进来"></textarea>
+    <label>拓扑文件</label>
+    <div class="row">
+      <input type="file" id="file" accept=".topo">
+      <button id="btn-upload" class="ghost">上传到中间目录</button>
+    </div>
+    <input id="topo" placeholder="或直接填 .topo 完整路径" style="margin-top:8px">
+    <div class="hint" id="topo-hint"></div>
+
+    <label>要求 YAML（可直接编辑）</label>
+    <textarea id="yaml" placeholder="把 requirements.yaml 的内容贴进来，或从下面文件列表打开"></textarea>
+    <div class="row">
+      <button id="btn-save" class="ghost">保存到中间目录</button>
+      <input id="save-name" value="requirements.yaml" style="flex:0 0 200px">
+    </div>
+
+    <label>目录设置（都必须在项目 output/ 下）</label>
+    <input id="work-dir" value="output/ui/work" placeholder="中间目录">
+    <input id="final-dir" value="output/ui/final" placeholder="最终目录" style="margin-top:8px">
+    <div class="row">
+      <button id="btn-list">刷新中间目录</button>
+      <span class="muted" id="work-label"></span>
+    </div>
+    <ul class="files" id="work-files"></ul>
+
+    <details>
+      <summary>AI 转换（可选，不填也能用）</summary>
+      <label>模型位置</label>
+      <select id="ai-provider">
+        <option value="cloud">云端（OpenAI 兼容）</option>
+        <option value="local">本地（Ollama / LM Studio）</option>
+      </select>
+      <label>base_url</label>
+      <input id="ai-base" value="https://api.deepseek.com/v1">
+      <label>model</label>
+      <input id="ai-model" value="deepseek-chat">
+      <label>api_key（云端必填，本地留空）</label>
+      <input id="ai-key" type="password" placeholder="sk-...">
+      <label>转换输出</label>
+      <select id="ai-mode">
+        <option value="yaml">直接出 YAML</option>
+        <option value="table">只出地址表（先核对）</option>
+      </select>
+      <label>要求原文（PDF/Word 里复制出来）</label>
+      <textarea id="ai-text" style="min-height:140px" placeholder="把老师的 PDF/Word 要求贴进来"></textarea>
+      <div class="row"><button id="btn-ai">转换</button></div>
+    </details>
+  </section>
+
+  <section>
     <div class="row">
       <button id="btn-summary" class="ghost">看拓扑</button>
       <button id="btn-validate" class="ghost">校验</button>
       <button id="btn-addr" class="ghost">地址表</button>
       <button id="btn-gen">生成配置</button>
     </div>
-    <label>输出目录（相对项目根，必须在 output/ 下）</label>
-    <input id="outdir" value="output/ui">
-  </section>
-  <section>
     <label>结果</label>
     <pre id="out">就绪。</pre>
+    <label>生成的文件</label>
     <ul class="files" id="files"></ul>
   </section>
 </main>
@@ -434,33 +620,81 @@ async function call(path, payload) {
     headers: {"Content-Type": "application/json", "X-Token": TOKEN},
     body: JSON.stringify(payload || {})
   });
+  try { return await res.json(); } catch (e) { return {ok: false, error: `HTTP ${res.status}`}; }
+}
+
+async function getJSON(path) {
+  const res = await fetch(path);
+  try { return await res.json(); } catch (e) { return {ok: false, error: `HTTP ${res.status}`}; }
+}
+
+function setBusy(busy) { document.querySelectorAll("button").forEach(b => b.disabled = busy); }
+function show(text, cls) { out.textContent = text; out.className = cls || ""; }
+function body(extra) {
+  return Object.assign({
+    topo: $("topo").value,
+    yaml: $("yaml").value,
+    work_dir: $("work-dir").value,
+    final_dir: $("final-dir").value
+  }, extra || {});
+}
+
+$("btn-upload").onclick = async () => {
+  const file = $("file").files[0];
+  if (!file) return show("先选一个 .topo 文件", "bad");
+  setBusy(true);
   try {
-    return await res.json();
-  } catch (e) {
-    return {ok: false, error: `HTTP ${res.status}`};
-  }
+    const buf = await file.arrayBuffer();
+    let bin = ""; const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const r = await call("/api/upload", {name: file.name, data: btoa(bin), work_dir: $("work-dir").value});
+    if (!r.ok) return show(r.error, "bad");
+    $("topo").value = r.path;
+    $("topo-hint").textContent = "已上传：" + r.path + "（" + r.size + " 字节）";
+    show("上传完成。下一步：填/贴 YAML，然后校验。", "ok");
+    loadWork();
+  } finally { setBusy(false); }
+};
+
+$("btn-save").onclick = async () => {
+  const name = ($("save-name").value || "requirements.yaml").trim();
+  const dir = ($("work-dir").value || "output/ui/work").replace(/[\\\\/]+$/, "");
+  setBusy(true);
+  try {
+    const r = await call("/api/save", {path: dir + "/" + name, content: $("yaml").value});
+    if (!r.ok) return show(r.error, "bad");
+    show("已保存：" + r.path, "ok");
+    loadWork();
+  } finally { setBusy(false); }
+};
+
+async function loadWork() {
+  const dir = encodeURIComponent($("work-dir").value || "output/ui/work");
+  const r = await getJSON("/api/list?dir=" + dir);
+  if (!r.ok) { $("work-files").innerHTML = ""; return; }
+  $("work-label").textContent = r.dir;
+  $("work-files").innerHTML = r.files.map(f =>
+    `<li><a data-path="${f.path}">${f.name}</a><span class="muted">${f.size} B</span></li>`
+  ).join("") || `<li class="muted">目录是空的</li>`;
+  $("work-files").querySelectorAll("a[data-path]").forEach(a => {
+    a.onclick = async () => {
+      const r2 = await getJSON("/api/read?path=" + encodeURIComponent(a.dataset.path));
+      if (!r2.ok) return show(r2.error, "bad");
+      if (r2.path.endsWith(".topo")) { $("topo").value = r2.path; show("已选拓扑：" + r2.path, "ok"); }
+      else { $("yaml").value = r2.content; show("已载入：" + r2.path + "（改完点保存）", "ok"); }
+    };
+  });
 }
 
-function setBusy(busy) {
-  document.querySelectorAll("button").forEach(b => b.disabled = busy);
-}
-
-function body() {
-  return { topo: $("topo").value, yaml: $("yaml").value, out_dir: $("outdir").value };
-}
-
-function show(text, cls) {
-  out.textContent = text;
-  out.className = cls || "";
-}
+$("btn-list").onclick = loadWork;
 
 $("btn-summary").onclick = async () => {
   setBusy(true);
   try {
     const r = await call("/api/summary", body());
     if (!r.ok) return show(r.error, "bad");
-    const lines = r.devices.map(d => `${d.name}  ${d.model}  ${d.type}  ${d.ports} 接口`);
-    show(`${r.devices.length} 台设备，${r.links} 条连线\\n\\n` + lines.join("\\n"));
+    show(`${r.devices.length} 台设备，${r.links} 条连线\\n\\n` +
+      r.devices.map(d => `${d.name}  ${d.model}  ${d.type}  ${d.ports} 接口`).join("\\n"));
   } finally { setBusy(false); }
 };
 
@@ -478,22 +712,47 @@ $("btn-addr").onclick = async () => {
   try {
     const r = await call("/api/address-table", body());
     if (!r.ok) return show(r.error, "bad");
-    show(r.markdown);
+    show(r.markdown + (r.saved ? `\\n\\n已保存：${r.saved}` : ""));
+    loadWork();
   } finally { setBusy(false); }
 };
 
 $("btn-gen").onclick = async () => {
-  setBusy(true);
-  $("files").innerHTML = "";
+  setBusy(true); $("files").innerHTML = "";
   try {
     const r = await call("/api/generate", body());
     if (!r.ok) return show(r.error, "bad");
-    show(`生成完成：${r.devices} 台设备\\n输出目录 ${r.out_dir}`, "ok");
+    show(`生成完成：${r.devices} 台设备\\n最终目录 ${r.final_dir}`, "ok");
     $("files").innerHTML = r.files.map(f =>
-      `<li><a href="/api/file?path=${encodeURIComponent(r.out_dir + "/" + f.name)}">${f.name}</a><span class="muted">${f.size} B</span></li>`
+      `<li><a href="/api/file?path=${encodeURIComponent(r.final_dir + "/" + f.name)}">${f.name}</a><span class="muted">${f.size} B</span></li>`
     ).join("");
   } finally { setBusy(false); }
 };
+
+$("btn-ai").onclick = async () => {
+  setBusy(true);
+  try {
+    const r = await call("/api/ai-convert", {
+      text: $("ai-text").value,
+      provider: $("ai-provider").value,
+      base_url: $("ai-base").value,
+      model: $("ai-model").value,
+      api_key: $("ai-key").value,
+      mode: $("ai-mode").value
+    });
+    if (!r.ok) return show(r.error, "bad");
+    if ($("ai-mode").value === "yaml") { $("yaml").value = r.content; show("已填入 YAML，先点校验确认。", "ok"); }
+    else show(r.content);
+  } finally { setBusy(false); }
+};
+
+$("ai-provider").onchange = () => {
+  const cloud = $("ai-provider").value === "cloud";
+  $("ai-base").value = cloud ? "https://api.deepseek.com/v1" : "http://127.0.0.1:11434/v1";
+  $("ai-model").value = cloud ? "deepseek-chat" : "qwen2.5:7b";
+};
+
+loadWork();
 </script>
 </body>
 </html>
