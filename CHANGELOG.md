@@ -18,6 +18,10 @@
 - **按行数分段导出**：`export_configs.py --chunk 40`（默认）把长设备拆成 `LSW1-01.txt`…，每段自带 `system-view`…`return`，单独粘也能跑——eNSP 一次粘贴行数有上限，整份 128 行会中途断掉。
 - **ACL 展开开关**：`apply.expand: true` 把一条规则集按接口克隆成编号连续的 ACL（3000/3001/3002）。S5700 上同一 ACL 不能重复挂多个 Vlanif，会报 `Sacl doesn't support config the same acl or rule repeatedly`。
 - **icmp-type 统一输出数字**：`icmp_type: echo` 生成 `icmp-type 8 0`。部分 VRP 版本不认 `echo` 名字，整条 rule 被拒后 ACL 只剩 permit，表现为「配了 ACL 但不生效」。
+- **RIP**：`protocols.rip` 支持进程号、版本、`devices` 限定范围；network 自动按类式地址推导（10.x → 10.0.0.0），v2 附带 `undo summary`。
+- **BGP**：`protocols.bgp` 支持 `as`、`router_id`、`neighbors`（remote_as / description）、network 自动或手工宣告，邻居上可挂 route-policy。
+- **前缀列表与路由策略**：`prefix_list`（前缀 + greater-equal / less-equal）与 `route_policy`（节点、if-match ip-prefix / acl、apply cost / local-preference / tag、apply_peer + import/export）。引用不存在的列表或 ACL 会在解析时报错。
+- **Easy IP 出方向 NAT**：`protocols.nat` 生成基本 ACL（2000-2999）+ 接口 `nat outbound`，`source` 支持部门 key / 网段 / any。
 
 ### 变更
 

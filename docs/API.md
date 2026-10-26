@@ -88,6 +88,11 @@ req.acls              # tuple[AclSpec, ...]
 | `MstpSpec` | `region`、`devices`（设备名 → 优先级） |
 | `VrrpSpec` | `groups` |
 | `DhcpSpec` | `pools`（名字 → 地址池）、`devices` |
+| `RipSpec` | `process`、`version`、`auto_networks`、`networks`、`devices` |
+| `BgpSpec` | `as_number`、`router_id`、`neighbors`、`auto_networks`、`networks`、`devices` |
+| `PrefixListSpec` | `name`、`device`、`rules`（`PrefixListRule`：`seq`、`action`、`prefix`、`greater_equal`、`less_equal`） |
+| `RoutePolicySpec` | `name`、`device`、`nodes`、`apply_peer`、`apply_direction` |
+| `NatRule` | `name`、`device`、`acl_number`、`interface`、`source`、`type`（目前只支持 easy-ip） |
 
 `DeviceSpec.department`、`DeviceSpec.layer` 只用于文档标注，不参与命令生成。
 `AclRule` 的 `source`/`destination` 在解析时已归一化：要么是 `any`，要么是部门 key，要么是 CIDR 字符串。
@@ -123,8 +128,13 @@ req.acls              # tuple[AclSpec, ...]
 | `dhcp_pool_commands(device, req)` | 同上 | 地址池命令 |
 | `acl_commands(device, req)` | 同上 | `(ACL 定义块, dict[接口名小写, traffic-filter 行])` |
 | `ospf_commands(device, spec, req)` | 同上 | OSPF 进程与 network |
+| `rip_commands(device, spec, req)` | 同上 | RIP 进程、版本与类式 network |
+| `bgp_commands(device, spec, req)` | 同上 | BGP 进程、邻居、network、邻居上的 route-policy |
+| `prefix_list_commands(device, req)` | 同上 | `ip ip-prefix` 规则 |
+| `route_policy_commands(device, req)` | 同上 | `route-policy` 节点与 `if-match` / `apply` |
+| `nat_commands(device, req)` | 同上 | `(基本 ACL 块, dict[接口名小写, nat outbound 行])` |
 
-`ip_commands` 的 `extras` 用于把 VRRP、DHCP、ACL 下发行合并进同一个接口块，避免重复进入接口视图。
+`ip_commands` 的 `extras` 用于把 VRRP、DHCP、ACL、NAT 的下发行合并进同一个接口块，避免重复进入接口视图。
 
 ---
 

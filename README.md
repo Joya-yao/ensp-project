@@ -65,6 +65,17 @@ lab.topo  ─┐
 3. **粘贴即用**：产出的命令要能整段粘进 eNSP 跑通——无 BOM、不重复换行、按行数分段、顶层用 `return` + `system-view` 收尾、命令里不出现中文。
 4. **通用优先**：不为一台设备的残留状态或某个实验的特殊情况打补丁。临时需求走命令行参数或 YAML 字段，默认值服务大多数场景，并且带测试。
 
+## 支持范围
+
+| 类别 | 已支持 |
+| --- | --- |
+| 二层 | VLAN、Access/Trunk、Vlanif 网关、Eth-Trunk（LACP/手工）、MSTP（域/实例/优先级/边缘口） |
+| 三层与高可用 | 接口 IP、VRRP、OSPF（自动或手工宣告）、RIP v1/v2、BGP（邻居 + network） |
+| 策略与出口 | 高级 ACL（五元组、icmp-type、tcp-flag）、前缀列表、路由策略、Easy IP 出方向 NAT |
+| 其它 | DHCP 全局地址池、地址与网关表、终端建议地址、Word / 分段 txt 输出 |
+
+暂不支持：OSPF 多区域明细、IS-IS、NAT Server、QoS、端口安全、802.1X、堆叠、IPv6、WLAN。
+
 ## 快速开始
 
 需要 Python 3.10+。

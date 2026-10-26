@@ -165,6 +165,43 @@ protocols:
     devices:
       AR1: {pools: [vlan10], interfaces: [GigabitEthernet0/0/0]}
 
+  rip:                            # 类式 network 由接口地址自动推，10.x 一律 10.0.0.0
+    process: 1
+    version: 2
+    devices: [AR2]                # 省略 = 所有有 IP 的设备
+    networks: []                  # 需要额外宣告时手写
+
+  bgp:
+    as: 65001
+    router_id: 1.1.1.1            # 可省略
+    devices: [AR1]
+    neighbors:
+      - {ip: 10.0.1.2, remote_as: 65002, description: peer-ar2}
+    networks: []                  # 省略时从接口地址自动宣告
+
+  prefix_list:
+    - name: PL-24
+      device: AR1
+      rules:
+        - {seq: 10, action: permit, prefix: 192.168.0.0/16, greater_equal: 24, less_equal: 24}
+        - {seq: 20, action: deny, prefix: 0.0.0.0/0, less_equal: 32}
+
+  route_policy:
+    - name: RP-IN
+      device: AR1
+      apply_peer: 10.0.1.2        # 在 BGP 邻居上应用
+      apply_direction: import     # import | export
+      nodes:
+        - {seq: 10, action: permit, match_prefix_list: PL-24, apply_local_preference: 200}
+        - {seq: 20, action: deny} # 也支持 match_acl / apply_cost / apply_tag
+
+  nat:                            # 只做出方向 Easy IP
+    - name: egress
+      device: AR1
+      acl_number: 2000            # 基本 ACL，2000-2999
+      interface: GigabitEthernet0/0/1
+      source: finance             # 部门 key / 网段 / any
+
   acl:                            # 部门间访问控制
     - name: finance-guard
       device: AR1                 # 在哪台设备上配
