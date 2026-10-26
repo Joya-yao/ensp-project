@@ -1,0 +1,49 @@
+# 骨架文件：只填分组和设备归属，不用写 VLAN / 网段 / 网关。
+# 改完执行：run.py --build-req groups.yaml --topo <你的拓扑.topo> -o requirements.yaml
+
+experiment: "大项目：ensp实验1 双核心园区网"
+
+groups:
+  - name: 销售部
+    size: 10
+    floor: 1
+    vlans: []
+  - name: 后勤部
+    size: 10
+    floor: 1
+    vlans: []
+  - name: 财务部
+    size: 5
+    floor: 2
+    vlans: []
+  - name: 研发部
+    size: 20
+    floor: 2
+    vlans: []
+
+devices:
+  AR1:
+    group: ""
+    layer: core
+  LSW1:
+    group: ""
+    layer: core
+  LSW2:
+    group: ""
+    layer: core
+  LSW3:
+    group: 销售部
+    layer: access
+  LSW4:
+    group: 后勤部
+    layer: access
+  LSW5:
+    group: 财务部
+    layer: access
+  LSW6:
+    group: 研发部
+    layer: access
+
+scaffold:
+  vlan_start: 10
+  vlan_step: 10

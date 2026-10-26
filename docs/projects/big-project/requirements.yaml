@@ -1,0 +1,277 @@
+experiment:
+  name: "大项目：双核心园区网（VRRP + MSTP + OSPF + Eth-Trunk + ACL）"
+  notes: "LSW1 主核心、LSW2 备用；VLAN 10/20 主在 LSW1，VLAN 30/40 主在 LSW2，做负载分担"
+
+departments:
+  g1_10: {name: 销售部, subnet: 10.10.0.0/24}
+  g2_20: {name: 后勤部, subnet: 10.20.0.0/24}
+  g3_30: {name: 财务部, subnet: 10.30.0.0/24}
+  g4_40: {name: 研发部, subnet: 10.40.0.0/24}
+
+devices:
+  AR1:
+    role: router
+    layer: core
+    interfaces:
+      - name: GigabitEthernet0/0/0
+        ip: 10.0.0.1/24
+        description: to-LSW1
+
+  LSW1:
+    role: switch
+    layer: core
+    vlans:
+      - {id: 10, name: sales}
+      - {id: 20, name: logistics}
+      - {id: 30, name: finance}
+      - {id: 40, name: rd}
+      - {id: 200, name: uplink}
+    link_aggregation:
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20, 30, 40, 200]
+        members: [GigabitEthernet0/0/23, GigabitEthernet0/0/24]
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-AR1
+        mode: access
+        vlan: 200
+      - name: GigabitEthernet0/0/2
+        description: to-LSW3-sales
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/3
+        description: to-LSW4-logistics
+        mode: access
+        vlan: 20
+      - name: GigabitEthernet0/0/4
+        description: to-LSW5-finance
+        mode: access
+        vlan: 30
+      - name: GigabitEthernet0/0/5
+        description: to-LSW6-rd
+        mode: access
+        vlan: 40
+      - name: Vlanif10
+        ip: 10.10.0.252/24
+        description: gw-sales
+      - name: Vlanif20
+        ip: 10.20.0.252/24
+        description: gw-logistics
+      - name: Vlanif30
+        ip: 10.30.0.252/24
+        description: gw-finance
+      - name: Vlanif40
+        ip: 10.40.0.252/24
+        description: gw-rd
+      - name: Vlanif200
+        ip: 10.0.0.2/24
+        description: to-AR1
+
+  LSW2:
+    role: switch
+    layer: core
+    vlans:
+      - {id: 10, name: sales}
+      - {id: 20, name: logistics}
+      - {id: 30, name: finance}
+      - {id: 40, name: rd}
+      - {id: 200, name: uplink}
+    link_aggregation:
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20, 30, 40, 200]
+        members: [GigabitEthernet0/0/23, GigabitEthernet0/0/24]
+    interfaces:
+      - name: GigabitEthernet0/0/2
+        description: to-LSW3-sales
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/3
+        description: to-LSW4-logistics
+        mode: access
+        vlan: 20
+      - name: GigabitEthernet0/0/4
+        description: to-LSW5-finance
+        mode: access
+        vlan: 30
+      - name: GigabitEthernet0/0/5
+        description: to-LSW6-rd
+        mode: access
+        vlan: 40
+      - name: Vlanif10
+        ip: 10.10.0.253/24
+        description: gw-sales
+      - name: Vlanif20
+        ip: 10.20.0.253/24
+        description: gw-logistics
+      - name: Vlanif30
+        ip: 10.30.0.253/24
+        description: gw-finance
+      - name: Vlanif40
+        ip: 10.40.0.253/24
+        description: gw-rd
+      - name: Vlanif200
+        ip: 10.0.0.3/24
+        description: to-AR1
+
+  LSW3:
+    role: switch
+    layer: access
+    department: 销售部
+    vlans:
+      - {id: 10, name: sales}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-LSW1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-LSW2
+        mode: access
+        vlan: 10
+      - name: Ethernet0/0/1
+        description: to-PC1
+        mode: access
+        vlan: 10
+        edged_port: true
+
+  LSW4:
+    role: switch
+    layer: access
+    department: 后勤部
+    vlans:
+      - {id: 20, name: logistics}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-LSW1
+        mode: access
+        vlan: 20
+      - name: GigabitEthernet0/0/2
+        description: to-LSW2
+        mode: access
+        vlan: 20
+      - name: Ethernet0/0/1
+        description: to-PC2
+        mode: access
+        vlan: 20
+        edged_port: true
+
+  LSW5:
+    role: switch
+    layer: access
+    department: 财务部
+    vlans:
+      - {id: 30, name: finance}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-LSW1
+        mode: access
+        vlan: 30
+      - name: GigabitEthernet0/0/2
+        description: to-LSW2
+        mode: access
+        vlan: 30
+      - name: Ethernet0/0/1
+        description: to-PC3
+        mode: access
+        vlan: 30
+        edged_port: true
+
+  LSW6:
+    role: switch
+    layer: access
+    department: 研发部
+    vlans:
+      - {id: 40, name: rd}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-LSW1
+        mode: access
+        vlan: 40
+      - name: GigabitEthernet0/0/2
+        description: to-LSW2
+        mode: access
+        vlan: 40
+      - name: Ethernet0/0/1
+        description: to-PC4
+        mode: access
+        vlan: 40
+        edged_port: true
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - {area: 0}
+    auto_networks: true
+
+  mstp:
+    region:
+      name: RG-1
+      revision: 1
+      instances:
+        - {instance: 1, vlans: [10, 20]}
+        - {instance: 2, vlans: [30, 40]}
+    devices:
+      LSW1: {priorities: {1: 4096, 2: 8192}}
+      LSW2: {priorities: {1: 8192, 2: 4096}}
+
+  vrrp:
+    groups:
+      - vrid: 10
+        interface: Vlanif10
+        virtual_ip: 10.10.0.254
+        devices:
+          LSW1: {priority: 120}
+          LSW2: {priority: 100}
+      - vrid: 20
+        interface: Vlanif20
+        virtual_ip: 10.20.0.254
+        devices:
+          LSW1: {priority: 120}
+          LSW2: {priority: 100}
+      - vrid: 30
+        interface: Vlanif30
+        virtual_ip: 10.30.0.254
+        devices:
+          LSW1: {priority: 100}
+          LSW2: {priority: 120}
+      - vrid: 40
+        interface: Vlanif40
+        virtual_ip: 10.40.0.254
+        devices:
+          LSW1: {priority: 100}
+          LSW2: {priority: 120}
+
+  # 一条规则集，按接口展开成 3000/3001/3002：
+  #   deny icmp echo   -> 别人 ping 不到财务
+  #   deny tcp syn     -> 别人建不了 TCP 连接
+  #   permit ip        -> 财务发起的回程包（echo-reply / ack）放行
+  # 交换机上同一 ACL 不能重复挂多个 Vlanif（报 Sacl doesn't support ...），
+  # 所以用 expand 克隆编号，规则一模一样。
+  acl:
+    - name: finance-guard-a
+      device: LSW1
+      acl_number: 3000
+      apply:
+        interfaces: [Vlanif10, Vlanif20, Vlanif40]
+        direction: inbound
+        expand: true
+      rules:
+        - {action: deny, protocol: icmp, icmp_type: echo, destination: g3_30}
+        - {action: deny, protocol: tcp, tcp_flag: syn, destination: g3_30}
+        - {action: permit, source: any, destination: any}
+    - name: finance-guard-b
+      device: LSW2
+      acl_number: 3000
+      apply:
+        interfaces: [Vlanif10, Vlanif20, Vlanif40]
+        direction: inbound
+        expand: true
+      rules:
+        - {action: deny, protocol: icmp, icmp_type: echo, destination: g3_30}
+        - {action: deny, protocol: tcp, tcp_flag: syn, destination: g3_30}
+        - {action: permit, source: any, destination: any}

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UNICODE" ?>
+<topo version="1.3.00.100">
+    <devices>
+        <dev id="LAB1-LSW1" name="LSW1" poe="0" model="S5700" settings="" system_mac="00-E0-FC-01-00-01" com_port="2000" bootmode="1" cx="348.000000" cy="210.000000" edit_left="375" edit_top="264">
+            <slot number="slot17" isMainBoard="1">
+                <interface sztype="Ethernet" interfacename="GE" count="24" />
+            </slot>
+        </dev>
+        <dev id="LAB1-LSW2" name="LSW2" poe="0" model="S5700" settings="" system_mac="00-E0-FC-01-00-02" com_port="2001" bootmode="1" cx="648.000000" cy="210.000000" edit_left="675" edit_top="264">
+            <slot number="slot17" isMainBoard="1">
+                <interface sztype="Ethernet" interfacename="GE" count="24" />
+            </slot>
+        </dev>
+        <dev id="LAB1-PC1" name="PC1" poe="0" model="PC" settings="" system_mac="00-E0-FC-01-00-11" com_port="2002" bootmode="1" cx="248.000000" cy="120.000000" edit_left="275" edit_top="174">
+            <slot number="slot1" isMainBoard="0">
+                <interface sztype="Ethernet" interfacename="Ethernet" count="1" />
+            </slot>
+        </dev>
+        <dev id="LAB1-PC2" name="PC2" poe="0" model="PC" settings="" system_mac="00-E0-FC-01-00-12" com_port="2003" bootmode="1" cx="248.000000" cy="300.000000" edit_left="275" edit_top="354">
+            <slot number="slot1" isMainBoard="0">
+                <interface sztype="Ethernet" interfacename="Ethernet" count="1" />
+            </slot>
+        </dev>
+        <dev id="LAB1-PC3" name="PC3" poe="0" model="PC" settings="" system_mac="00-E0-FC-01-00-13" com_port="2004" bootmode="1" cx="748.000000" cy="120.000000" edit_left="775" edit_top="174">
+            <slot number="slot1" isMainBoard="0">
+                <interface sztype="Ethernet" interfacename="Ethernet" count="1" />
+            </slot>
+        </dev>
+        <dev id="LAB1-PC4" name="PC4" poe="0" model="PC" settings="" system_mac="00-E0-FC-01-00-14" com_port="2005" bootmode="1" cx="748.000000" cy="300.000000" edit_left="775" edit_top="354">
+            <slot number="slot1" isMainBoard="0">
+                <interface sztype="Ethernet" interfacename="Ethernet" count="1" />
+            </slot>
+        </dev>
+    </devices>
+    <lines>
+        <line srcDeviceID="LAB1-LSW1" destDeviceID="LAB1-PC1">
+            <interfacePair lineName="Copper" srcIndex="0" srcBoundRectIsMoved="0" srcBoundRect_X="350.0" srcBoundRect_Y="200.0" srcOffset_X="0" srcOffset_Y="0" tarIndex="0" tarBoundRectIsMoved="0" tarBoundRect_X="260.0" tarBoundRect_Y="130.0" tarOffset_X="0" tarOffset_Y="0" />
+        </line>
+        <line srcDeviceID="LAB1-LSW1" destDeviceID="LAB1-PC2">
+            <interfacePair lineName="Copper" srcIndex="1" srcBoundRectIsMoved="0" srcBoundRect_X="350.0" srcBoundRect_Y="215.0" srcOffset_X="0" srcOffset_Y="0" tarIndex="0" tarBoundRectIsMoved="0" tarBoundRect_X="260.0" tarBoundRect_Y="310.0" tarOffset_X="0" tarOffset_Y="0" />
+        </line>
+        <line srcDeviceID="LAB1-LSW2" destDeviceID="LAB1-PC3">
+            <interfacePair lineName="Copper" srcIndex="0" srcBoundRectIsMoved="0" srcBoundRect_X="650.0" srcBoundRect_Y="200.0" srcOffset_X="0" srcOffset_Y="0" tarIndex="0" tarBoundRectIsMoved="0" tarBoundRect_X="760.0" tarBoundRect_Y="130.0" tarOffset_X="0" tarOffset_Y="0" />
+        </line>
+        <line srcDeviceID="LAB1-LSW2" destDeviceID="LAB1-PC4">
+            <interfacePair lineName="Copper" srcIndex="1" srcBoundRectIsMoved="0" srcBoundRect_X="650.0" srcBoundRect_Y="215.0" srcOffset_X="0" srcOffset_Y="0" tarIndex="0" tarBoundRectIsMoved="0" tarBoundRect_X="760.0" tarBoundRect_Y="310.0" tarOffset_X="0" tarOffset_Y="0" />
+        </line>
+        <line srcDeviceID="LAB1-LSW1" destDeviceID="LAB1-LSW2">
+            <interfacePair lineName="Copper" srcIndex="2" srcBoundRectIsMoved="0" srcBoundRect_X="500.0" srcBoundRect_Y="210.0" srcOffset_X="0" srcOffset_Y="0" tarIndex="2" tarBoundRectIsMoved="0" tarBoundRect_X="600.0" tarBoundRect_Y="210.0" tarOffset_X="0" tarOffset_Y="0" />
+        </line>
+    </lines>
+    <shapes />
+    <txttips />
+</topo>

@@ -1,5 +1,28 @@
 # 更新记录
 
+## 未发布
+
+### 新增
+
+- **地址与网关章节**：Word 里多一节「地址与网关」，含三张表——网段与网关（网段/掩码/网关/网关在哪/该网段设备地址/终端可用地址）、每台设备的地址（设备/接口/IP/掩码/VLAN/网关/说明）、终端建议地址（PC 接在哪台交换机哪个口、VLAN、建议 IP、掩码、网关）。网关推断顺序：VRRP 虚拟 IP → DHCP 地址池 → 网段内 `.254` → 网段内唯一地址，推不出写 `—` 不瞎猜。
+- **终端地址推导**：按拓扑连线找 PC 所连交换机端口，读该端口的 access VLAN，从对应网段按顺序取第一个未占用地址。
+- **两阶段 AI 工作流**：`--ai-input --ai-table` 只让 AI 出「地址与网关表」，人工确认后再生成 YAML；提示词模板 `docs/prompts/requirements-to-yaml.md` 按「表格 → 确认 → YAML」重写，禁止模型一步做到命令。
+- **`--address-table`**：不生成命令，只打印三张 Markdown 表（网段与网关 / 每台设备地址 / 终端建议地址），用来回读 YAML 有没有把网关改错。
+- **`labgen.addresses`**：地址与网关的纯函数层，Word 与命令行共用同一份取值逻辑。
+- **`scripts/export_configs.py`**：把命令按设备拆成 `<设备名>.txt` + `README.txt`，方便逐台整段粘贴。
+- **实验指导书**：`docs/labs/` 增加实验一（VLAN/Trunk/VLANIF）指导书、参考拓扑与要求文件。
+- **ACL 一条搞定 + 一次挂多接口**：`AclRule` 支持 `icmp_type`、`tcp_flag`，`AclSpec.apply` 支持 `interfaces: [...]`。这样「别人进不来、财务出得去」只写一条 ACL：`deny icmp icmp-type echo` + `deny tcp tcp-flag syn` + `permit ip`，一次挂到多个 VLANIF 入方向，不再按接口复制。
+- **txt 导出修编码**：`export_configs.py` 默认写无 BOM 的 utf-8，新增 `--encoding gbk|utf-8|ascii`，并修掉 Windows 下 `\r\n` 被二次转义成空行的问题。
+- **脚手架认部门更准**：先按「是/为/包括」截断再匹配，「机分别是销售部」「不能访问财务部」不再被当成部门名。
+- **粘贴安全样式**：顶层 `quit` 改写为 `return` + `system-view`（`labgen.pastestyle`）。`return` 必然回用户视图、`system-view` 必然回系统视图，即使控制台重复执行一行也不会越退越深；嵌套 `quit`（`ospf` 里的 `area`）保留。
+- **按行数分段导出**：`export_configs.py --chunk 40`（默认）把长设备拆成 `LSW1-01.txt`…，每段自带 `system-view`…`return`，单独粘也能跑——eNSP 一次粘贴行数有上限，整份 128 行会中途断掉。
+- **ACL 展开开关**：`apply.expand: true` 把一条规则集按接口克隆成编号连续的 ACL（3000/3001/3002）。S5700 上同一 ACL 不能重复挂多个 Vlanif，会报 `Sacl doesn't support config the same acl or rule repeatedly`。
+- **icmp-type 统一输出数字**：`icmp_type: echo` 生成 `icmp-type 8 0`。部分 VRP 版本不认 `echo` 名字，整条 rule 被拒后 ACL 只剩 permit，表现为「配了 ACL 但不生效」。
+
+### 变更
+
+- `PC/STA 的 IP 不生成` 的限制收窄：PC 地址不写进命令（eNSP 里手工配），但文档会给出建议地址与网关。
+
 ## v0.1.0 — 2026-10-23
 
 首个可用版本：从 eNSP 工程和结构化要求生成 VRP 配置文档。

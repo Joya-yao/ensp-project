@@ -82,8 +82,8 @@ req.acls              # tuple[AclSpec, ...]
 | `VlanSpec` | `id`、`name` |
 | `DeviceSpec` | `name`、`role`、`interfaces`、`vlans`、`department`、`layer` |
 | `Department` | `key`、`name`、`subnet` |
-| `AclRule` | `action`、`source`、`destination`、`protocol`、`destination_port` |
-| `AclSpec` | `name`、`device`、`rules`、`acl_number`、`interface`、`direction` |
+| `AclRule` | `action`、`source`、`destination`、`protocol`、`destination_port`、`icmp_type`、`tcp_flag` |
+| `AclSpec` | `name`、`device`、`rules`、`acl_number`、`interface`、`direction`、`interfaces` |
 | `OspfSpec` | `process`、`router_id`、`areas`、`auto_networks` |
 | `MstpSpec` | `region`、`devices`（设备名 → 优先级） |
 | `VrrpSpec` | `groups` |
@@ -91,6 +91,8 @@ req.acls              # tuple[AclSpec, ...]
 
 `DeviceSpec.department`、`DeviceSpec.layer` 只用于文档标注，不参与命令生成。
 `AclRule` 的 `source`/`destination` 在解析时已归一化：要么是 `any`，要么是部门 key，要么是 CIDR 字符串。
+`AclRule.icmp_type`、`AclRule.tcp_flag` 只在对应协议下合法，用来表达「只挡新建连接、放行回程」这一类无状态 ACL 写法。
+`AclSpec.interfaces` 非空时一条 ACL 会挂到多个接口上（同方向），`interface` 仍保留单接口写法。
 
 `InterfaceSpec.network` 是只读属性，返回 `IPv4Network`。
 
@@ -165,13 +167,29 @@ req.acls              # tuple[AclSpec, ...]
 
 ---
 
+## labgen.addresses
+
+地址与网关对照的纯函数层，Word 文档和命令行表格共用。
+
+| 函数 | 作用 |
+| --- | --- |
+| `address_entries(req)` | 所有带 IP 的接口 → `AddressEntry` 列表 |
+| `gateway_map(req, entries)` | 网段 → (网关, 来源)。顺序：VRRP → DHCP → `.254` → 唯一地址 |
+| `vlan_networks(entries)` | VLAN → 网段，从 `VlanifN` 推 |
+| `network_rows(req)` | 网段与网关表行 |
+| `device_rows(req)` | 每台设备地址表行，自己是网关的写「本机」 |
+| `terminal_rows(topo, req)` | PC 接入位置 + 按顺序分配的建议地址 |
+| `render_markdown(topo, req)` | 三张表的 Markdown 文本，给 `--address-table` 用 |
+
 ## labgen.docx_writer
 
 ### `build_document(topo, req, configs) -> Document`
 
 构建 `python-docx` 文档对象但不写盘，便于测试。
 
-文档结构：标题 → 使用说明 → 拓扑概览（设备表、连线表）→ 每台设备一节 → 未生成配置的设备清单。
+文档结构：标题 → 使用说明 → 拓扑概览（设备表、连线表）→ 地址与网关（网段表、每台设备地址表、终端建议地址）→ 每台设备一节 → 未生成配置的设备清单。
+
+「地址与网关」的网关推断顺序：VRRP 虚拟 IP → DHCP 地址池 `gateway` → 网段内 `.254` → 网段内唯一地址；都没有时写 `—`，不猜。终端建议地址按拓扑连线找到 PC 所连交换机端口，从该端口 access VLAN 的网段里取第一个未占用地址。
 
 ### `write_docx(topo, req, configs, path) -> Path`
 

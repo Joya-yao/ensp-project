@@ -1,0 +1,50 @@
+experiment:
+  name: "实验一 VLAN 划分、Trunk 与 VLANIF 三层互通"
+  notes: "LSW1 做三层网关（Vlanif10/20），LSW2 纯二层，GE0/0/3 互联走 trunk"
+
+devices:
+  LSW1:
+    role: switch
+    layer: core
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-PC1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-PC2
+        mode: access
+        vlan: 20
+      - name: GigabitEthernet0/0/3
+        description: to-LSW2
+        mode: trunk
+        allow_vlans: [10, 20]
+      - name: Vlanif10
+        ip: 10.10.0.254/24
+        description: gateway-student
+      - name: Vlanif20
+        ip: 10.20.0.254/24
+        description: gateway-teacher
+
+  LSW2:
+    role: switch
+    layer: access
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-PC3
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-PC4
+        mode: access
+        vlan: 20
+      - name: GigabitEthernet0/0/3
+        description: to-LSW1
+        mode: trunk
+        allow_vlans: [10, 20]

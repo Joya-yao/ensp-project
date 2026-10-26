@@ -1,0 +1,58 @@
+experiment:
+  name: "实验一·加长版 VLAN + Eth-Trunk + VLANIF"
+  notes: "LSW1/LSW2 之间用两条线做 Eth-Trunk 1（LACP），trunk 放行 VLAN 10/20；网关仍在 LSW1 的 Vlanif"
+
+devices:
+  LSW1:
+    role: switch
+    layer: core
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    link_aggregation:
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20]
+        members:
+          - GigabitEthernet0/0/3
+          - GigabitEthernet0/0/4
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-PC1
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-PC2
+        mode: access
+        vlan: 20
+      - name: Vlanif10
+        ip: 10.10.0.254/24
+        description: gateway-student
+      - name: Vlanif20
+        ip: 10.20.0.254/24
+        description: gateway-teacher
+
+  LSW2:
+    role: switch
+    layer: access
+    vlans:
+      - {id: 10, name: student}
+      - {id: 20, name: teacher}
+    link_aggregation:
+      - id: 1
+        mode: lacp
+        port_mode: trunk
+        allow_vlans: [10, 20]
+        members:
+          - GigabitEthernet0/0/3
+          - GigabitEthernet0/0/4
+    interfaces:
+      - name: GigabitEthernet0/0/1
+        description: to-PC3
+        mode: access
+        vlan: 10
+      - name: GigabitEthernet0/0/2
+        description: to-PC4
+        mode: access
+        vlan: 20

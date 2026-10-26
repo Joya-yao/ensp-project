@@ -10,5 +10,6 @@ samples/*/
 tools/
 ai.yaml
 requirements.generated.yaml
+addresses.generated.md
 samples/*.topo
 samples/teacher-requirements.md

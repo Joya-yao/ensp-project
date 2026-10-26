@@ -10,11 +10,41 @@
 
 先校验要求文件，字段错了当场报出来：
 
-![校验要求文件](docs/images/cli-validate.png)
+```text
+$ python run.py --validate --req docs/labs/lab01-vlan.yaml
+要求文件：lab01-vlan.yaml
+实验：实验一 VLAN 划分、Trunk 与 VLANIF 三层互通
+设备 2 台：LSW1、LSW2
+接口 8 个，VLAN 4 个
+协议：接口 IP、VLAN
+校验通过。
+```
 
-再生成命令，每台设备一段，整段复制即可：
+再生成命令，每台设备一段，整段复制即可（节选）：
 
-![生成配置命令](docs/images/cli-config.png)
+```text
+$ python run.py lab01.topo --req lab01-vlan.yaml
+===== LSW1 =====
+system-view
+sysname LSW1
+vlan 10
+ name student
+return
+system-view
+interface GigabitEthernet0/0/1
+ description to-PC1
+ port link-type access
+ port default vlan 10
+return
+system-view
+interface Vlanif10
+ description gateway-student
+ ip address 10.10.0.254 255.255.255.0
+return
+...
+```
+
+每个块用 `return` + `system-view` 收尾，粘贴中断也不会掉进用户视图；`--out` 出 Word，`scripts/export_configs.py` 出逐设备 txt。
 
 ## 它解决什么问题
 
@@ -25,6 +55,15 @@ lab.topo  ─┐
            ├─→ 命令生成 ─→ 配置文档.docx（AR1 / AR2 / LSW1 各一节）
 要求.yaml ─┘
 ```
+
+## 设计原则
+
+这个项目面向所有用 eNSP 做实验/课程设计的人，不是某一个人的脚本。改代码前先过一遍这四条：
+
+1. **生成是确定性的**：同一份拓扑和要求，两次输出逐字节相同。不引入随机、时间戳、隐式网络请求；AI 只出现在「要求原文 → YAML」这一步，且完全可选。
+2. **不猜**：原文没给的值不编，网关推不出来就写 `—` 或 `?`，让用户确认。错的配置比没有配置更浪费时间。
+3. **粘贴即用**：产出的命令要能整段粘进 eNSP 跑通——无 BOM、不重复换行、按行数分段、顶层用 `return` + `system-view` 收尾、命令里不出现中文。
+4. **通用优先**：不为一台设备的残留状态或某个实验的特殊情况打补丁。临时需求走命令行参数或 YAML 字段，默认值服务大多数场景，并且带测试。
 
 ## 快速开始
 
@@ -110,6 +149,24 @@ cloud:
 ```
 
 生成后如果校验不过，命令会打印具体哪个字段错了；改完再跑 `--validate` 复查。
+
+**要求是 PDF / Word 时，先只出地址表**：让模型一步做到命令最容易把网关写错，所以分两步。
+
+```powershell
+# 第一步：只出三张表（网段与网关 / 每台设备地址 / 终端建议地址），不出命令
+.\.venv\Scripts\python.exe run.py --ai-input 要求原文.md --ai-config ai.yaml --ai-table
+
+# 人工核对、改完表格后，第二步：把确认过的表当输入，生成 YAML
+.\.venv\Scripts\python.exe run.py --ai-input addresses.generated.md --ai-config ai.yaml --ai-out samples\generated.yaml
+```
+
+拿到 YAML 后想再核对一遍地址，不用生成命令：
+
+```powershell
+.\.venv\Scripts\python.exe run.py 你的拓扑.topo --req samples\generated.yaml --address-table
+```
+
+详细的提示词与核对清单见 [提示词模板](docs/prompts/requirements-to-yaml.md)。
 
 ## 支持的配置
 

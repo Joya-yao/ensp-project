@@ -1,0 +1,107 @@
+# 由 groups.yaml 展开生成。可以直接改，但重新展开会覆盖（除非换个文件名）。
+# 标 TODO 的地方需要人工确认，其余是确定性推导。
+
+experiment:
+  name: "大项目：ensp实验1 双核心园区网"
+
+departments:
+  g1_10:
+    name: 销售部
+    subnet: 10.10.0.0/24
+  g2_20:
+    name: 后勤部
+    subnet: 10.20.0.0/24
+  g3_30:
+    name: 财务部
+    subnet: 10.30.0.0/24
+  g4_40:
+    name: 研发部
+    subnet: 10.40.0.0/24
+
+devices:
+  AR1:
+    role: router
+    # TODO: 这台设备承载哪个分组，填了才会生成 VLAN 和网关
+
+  LSW1:
+    role: switch
+    # TODO: 这台设备承载哪个分组，填了才会生成 VLAN 和网关
+
+  LSW2:
+    role: switch
+    # TODO: 这台设备承载哪个分组，填了才会生成 VLAN 和网关
+
+  LSW3:
+    role: switch
+    department: 销售部
+    layer: access
+    vlans:
+      - {id: 10, name: 销售部}
+    interfaces:
+      - name: Vlanif10      # TODO: 不是网关就别留这一行
+        ip: 10.10.0.254/24
+      # TODO: 物理口归属，例如
+      # - {name: Ethernet0/0/1, mode: access, vlan: 10}
+
+  LSW4:
+    role: switch
+    department: 后勤部
+    layer: access
+    vlans:
+      - {id: 20, name: 后勤部}
+    interfaces:
+      - name: Vlanif20      # TODO: 不是网关就别留这一行
+        ip: 10.20.0.254/24
+      # TODO: 物理口归属，例如
+      # - {name: Ethernet0/0/1, mode: access, vlan: 20}
+
+  LSW5:
+    role: switch
+    department: 财务部
+    layer: access
+    vlans:
+      - {id: 30, name: 财务部}
+    interfaces:
+      - name: Vlanif30      # TODO: 不是网关就别留这一行
+        ip: 10.30.0.254/24
+      # TODO: 物理口归属，例如
+      # - {name: Ethernet0/0/1, mode: access, vlan: 30}
+
+  LSW6:
+    role: switch
+    department: 研发部
+    layer: access
+    vlans:
+      - {id: 40, name: 研发部}
+    interfaces:
+      - name: Vlanif40      # TODO: 不是网关就别留这一行
+        ip: 10.40.0.254/24
+      # TODO: 物理口归属，例如
+      # - {name: Ethernet0/0/1, mode: access, vlan: 40}
+
+protocols:
+  ospf:
+    process: 1
+    areas:
+      - {area: 0}
+    auto_networks: true
+
+# TODO: 需要生成树时取消注释并确认根桥
+#  mstp:
+#    region: {name: RG-1, revision: 1}
+#    instances:
+#      - {instance: 1, vlans: [10]}
+
+# TODO: 需要网关冗余时取消注释，确认 vrid / 虚拟 IP / 优先级
+#  vrrp:
+#    groups:
+#      - {vrid: 10, interface: Vlanif10, virtual_ip: 10.10.0.1,
+#         devices: {LSW1: {priority: 120}, LSW2: {priority: 100}}}
+
+# TODO: 需要部门隔离时取消注释
+#  acl:
+#    - name: guard
+#      device: LSW1
+#      apply: {interface: Vlanif10, direction: inbound}
+#      rules:
+#        - {action: deny, source: any, destination: g1_10}
