@@ -65,6 +65,27 @@ lab.topo  ─┐
 3. **粘贴即用**：产出的命令要能整段粘进 eNSP 跑通——无 BOM、不重复换行、按行数分段、顶层用 `return` + `system-view` 收尾、命令里不出现中文。
 4. **通用优先**：不为一台设备的残留状态或某个实验的特殊情况打补丁。临时需求走命令行参数或 YAML 字段，默认值服务大多数场景，并且带测试。
 
+## 桌面界面
+
+不想敲命令时用本地网页界面，纯 Python 起服务，不装 Node、不打包：
+
+```powershell
+.\.venv\Scripts\python.exe run.py --ui
+```
+
+浏览器会自动打开 `http://127.0.0.1:8765/?t=…`，页面上能做四件事：看拓扑、校验 YAML、出地址表、生成配置（Word + 分段 txt，可直接点下载）。
+
+想要独立窗口而不是浏览器标签页：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install pywebview
+.\.venv\Scripts\python.exe run.py --ui --window
+```
+
+没装 pywebview 时会自动退回浏览器，功能一样。
+
+安全边界：服务只监听 `127.0.0.1`，每次启动生成一次性 token；生成目录被限制在项目的 `output/` 下，下载接口不能读这个目录以外的文件。
+
 ## 支持范围
 
 | 类别 | 已支持 |

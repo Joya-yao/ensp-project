@@ -22,6 +22,7 @@
 - **BGP**：`protocols.bgp` 支持 `as`、`router_id`、`neighbors`（remote_as / description）、network 自动或手工宣告，邻居上可挂 route-policy。
 - **前缀列表与路由策略**：`prefix_list`（前缀 + greater-equal / less-equal）与 `route_policy`（节点、if-match ip-prefix / acl、apply cost / local-preference / tag、apply_peer + import/export）。引用不存在的列表或 ACL 会在解析时报错。
 - **Easy IP 出方向 NAT**：`protocols.nat` 生成基本 ACL（2000-2999）+ 接口 `nat outbound`，`source` 支持部门 key / 网段 / any。
+- **本地网页界面**：`run.py --ui` 用标准库起服务，浏览器里看拓扑、校验 YAML、出地址表、生成配置并直接下载；`--window` 配 pywebview 可得到独立窗口，没装则退回浏览器。只监听 `127.0.0.1`，带一次性 token，写盘与下载都限制在项目 `output/` 下。
 
 ### 变更
 

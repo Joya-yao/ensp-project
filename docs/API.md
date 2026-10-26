@@ -191,6 +191,28 @@ req.acls              # tuple[AclSpec, ...]
 | `terminal_rows(topo, req)` | PC 接入位置 + 按顺序分配的建议地址 |
 | `render_markdown(topo, req)` | 三张表的 Markdown 文本，给 `--address-table` 用 |
 
+## labgen.ui
+
+本地网页界面，纯标准库（`http.server`），只监听 `127.0.0.1`。
+
+| 函数 | 作用 |
+| --- | --- |
+| `make_server(port=0, root=None, out_dir=None)` | 起服务，返回 `(server, url)`；port=0 时由系统分配，url 里带一次性 token |
+| `serve(port=8765, open_browser=True, window=False)` | 阻塞运行；`window=True` 时尝试用 pywebview 开独立窗口，没装则退回浏览器 |
+
+HTTP 接口：
+
+| 路径 | 方法 | 作用 |
+| --- | --- | --- |
+| `/` | GET | 单页界面 |
+| `/api/summary` | POST | 解析拓扑，返回设备与连线概况 |
+| `/api/validate` | POST | 校验 YAML |
+| `/api/address-table` | POST | 返回地址与网关 Markdown |
+| `/api/generate` | POST | 生成 docx + 分段 txt，返回文件清单 |
+| `/api/file?path=` | GET | 下载 `output/` 下的产物 |
+
+POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实际值）；`yaml`、`topo`、`out_dir` 必须是字符串，类型不对返回 400 而不是断开连接。
+
 ## labgen.docx_writer
 
 ### `build_document(topo, req, configs) -> Document`
