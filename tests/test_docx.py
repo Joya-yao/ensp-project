@@ -82,3 +82,64 @@ def test_write_docx_creates_file(built, tmp_path):
     out = write_docx(topo, req, configs, tmp_path / "out.docx")
     assert out.is_file()
     assert out.stat().st_size > 4000
+
+
+def _table_rows(doc, header):
+    header = tuple(header) if isinstance(header, (list, tuple)) else (header,)
+    for table in doc.tables:
+        texts = [[cell.text for cell in row.cells] for row in table.rows]
+        if texts and tuple(texts[0][: len(header)]) == header:
+            return texts
+    return []
+
+
+ADDRESS_HEADER = ("设备", "接口", "IP", "掩码", "VLAN", "网关", "说明")
+
+
+def test_address_section_lists_interface_ip(topo):
+    req = load_requirements(ROOT / "samples" / "requirements.yaml")
+    doc = build_document(topo, req, build_configs(topo, req))
+    assert "地址与网关" in _texts(doc)
+    rows = _table_rows(doc, ADDRESS_HEADER)
+    assert ["AR1", "GigabitEthernet0/0/0", "10.0.1.1", "255.255.255.0", "—", "—", "to-LSW1"] in rows
+
+
+def test_gateway_comes_from_vrrp(topo):
+    req = load_requirements(ROOT / "samples" / "requirements-vrrp.yaml")
+    doc = build_document(topo, req, build_configs(topo, req))
+    rows = _table_rows(doc, ADDRESS_HEADER)
+    ar1 = next(row for row in rows[1:] if row[0] == "AR1")
+    assert ar1[5] == "10.0.1.254"
+    networks = _table_rows(doc, ("网段", "掩码", "网关"))
+    assert any("VRRP1" in row[3] and row[2] == "10.0.1.254" for row in networks)
+
+
+def test_gateway_inferred_from_254(topo):
+    req = load_requirements(ROOT / "samples" / "requirements-vlanif.yaml")
+    doc = build_document(topo, req, build_configs(topo, req))
+    rows = _table_rows(doc, ADDRESS_HEADER)
+    gateway_rows = [row for row in rows[1:] if row[5] == "本机"]
+    assert gateway_rows
+    assert any(row[1] == "Vlanif10" and row[4] == "10" for row in rows[1:])
+
+
+def test_layer2_devices_are_called_out(topo):
+    req = load_requirements(ROOT / "samples" / "requirements-vlan.yaml")
+    doc = build_document(topo, req, build_configs(topo, req))
+    assert any("没有三层地址的设备" in t and "LSW1" in t for t in _texts(doc))
+
+
+def test_terminal_addresses_follow_access_vlan():
+    from labgen.topo import parse_topo
+
+    lab_topo = parse_topo(ROOT / "docs" / "labs" / "lab01.topo")
+    req = load_requirements(ROOT / "docs" / "labs" / "lab01-vlan.yaml")
+    doc = build_document(lab_topo, req, build_configs(lab_topo, req))
+
+    rows = _table_rows(doc, ("终端", "接在", "VLAN"))
+    by_name = {row[0]: row for row in rows[1:]}
+    assert by_name["PC1"][1:5] == ["LSW1:GigabitEthernet0/0/1", "10", "10.10.0.1", "255.255.255.0"]
+    assert by_name["PC2"][1:5] == ["LSW1:GigabitEthernet0/0/2", "20", "10.20.0.1", "255.255.255.0"]
+    assert by_name["PC3"][3] == "10.10.0.2"
+    assert by_name["PC4"][3] == "10.20.0.2"
+    assert by_name["PC1"][5].startswith("10.10.0.254")

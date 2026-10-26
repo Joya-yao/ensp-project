@@ -22,7 +22,25 @@ __all__ = [
     "load_ai_config",
     "chat",
     "convert_requirements",
+    "convert_address_table",
 ]
+
+ADDRESS_PROMPT = """你是网络实验配置助手。用户给的是 PDF/Word 实验要求原文，可能有 OCR 错误和错位的表格。
+
+现在只做一件事：提取地址，输出 Markdown 表格。不要输出 YAML，不要输出配置命令。
+
+输出三张表，表头照抄：
+表 1 网段与网关：| 网段 | 掩码 | 网关 | 网关在哪台设备 | 原文依据 |
+表 2 每台设备的地址：| 设备 | 接口 | IP | 掩码 | VLAN | 网关 | 说明 |
+表 3 终端地址：| 终端 | 接在哪 | VLAN | IP | 掩码 | 网关 |
+
+规则：
+1. 只写原文能推出来的值。没写也推不出的，写 ?，不要编地址、不要默认 .254。
+2. 网关按原文写；原文只说「交换机做网关」没给地址时写 ?。
+3. 接口名用 VRP 写法：GigabitEthernet0/0/1、Vlanif10、Eth-Trunk1。
+4. 表 3 原文没给 PC 地址就留空表。
+5. 表格后面加两节：「待确认」逐条列出拿不准的项和原文出处；「我推断的」列出按惯例补的值和依据。
+"""
 
 SYSTEM_PROMPT = """你是网络实验配置助手。把用户的实验要求转成 YAML。
 
@@ -42,6 +60,15 @@ SYSTEM_PROMPT = """你是网络实验配置助手。把用户的实验要求转�
 8. 原文说「A 不能访问 B，但 B 可以访问 C」这类访问控制，必须写成 acl 规则：
    source/destination 用部门 key 或 any；默认动作用 permit / deny，按顺序匹配。
 9. 原文没提到的不要猜；缺信息用 YAML 注释 # TODO: 标出，不要编造。
+10. ACL 尽量少，先判断一条 ACL 能不能做完：
+    - 「别人不能访问财务部，财务部可以访问别人」= deny icmp icmp-type echo + deny tcp tcp-flag syn
+      + permit ip，一条 ACL 就够，用 apply.interfaces 一次挂到多个 VLANIF 入方向。
+    - 不要按接口复制成多条 ACL；一条能表达就不写第二条。
+    - 交换机（Vlanif）上同一个 ACL 不能挂多个接口，会报 SACL 重复绑定：
+      一条规则集 + apply.interfaces + expand: true，工具会自动克隆成 3000/3001/3002。
+    - 无状态 ACL 做不到的（双向都要挡、需要会话表）在输出里标 TODO 说明，别硬凑规则。
+11. description、vlan name 只用 ASCII；中文只放 department / experiment.name 这类文档字段。
+    eNSP 命令行吃中文会乱码，粘贴会中途失败。
 """
 
 FIELD_GUIDE = """字段示例：
@@ -88,6 +115,14 @@ protocols:
       rules:
         - {action: permit, source: finance, destination: server}
         - {action: deny, source: any, destination: finance}
+        - {action: permit, source: any, destination: any}
+    - name: finance-guard-once
+      device: LSW1
+      acl_number: 3000
+      apply: {interfaces: [Vlanif10, Vlanif20, Vlanif40], direction: inbound}
+      rules:
+        - {action: deny, protocol: icmp, icmp_type: echo, destination: finance}
+        - {action: deny, protocol: tcp, tcp_flag: syn, destination: finance}
         - {action: permit, source: any, destination: any}
 """
 
@@ -184,11 +219,11 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int) -> dict:
         raise AiError(f"连不上 AI 接口 {url}：{exc.reason}") from exc
 
 
-def chat(config: AiConfig, requirement_text: str) -> str:
+def chat(config: AiConfig, requirement_text: str, system_prompt: str | None = None) -> str:
     """发一次对话请求，返回模型输出文本。"""
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + "\n" + FIELD_GUIDE},
+        {"role": "system", "content": system_prompt or (SYSTEM_PROMPT + "\n" + FIELD_GUIDE)},
         {"role": "user", "content": "实验要求原文：\n" + requirement_text},
     ]
     headers = {}
@@ -227,3 +262,10 @@ def convert_requirements(config: AiConfig, requirement_text: str) -> str:
     """要求原文 → YAML 文本（已去围栏，未校验）。"""
 
     return strip_code_fence(chat(config, requirement_text))
+
+
+def convert_address_table(config: AiConfig, requirement_text: str) -> str:
+    """阶段一：要求原文 → 地址与网关 Markdown 表格（不产出 YAML、不产出命令）。"""
+
+    text = chat(config, requirement_text, system_prompt=ADDRESS_PROMPT).strip()
+    return text + "\n"

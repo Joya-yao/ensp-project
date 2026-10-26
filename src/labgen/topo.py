@@ -384,9 +384,23 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--req", help="requirements.yaml，给出后输出每台设备的命令")
     parser.add_argument("--out", help="输出 .docx 路径（需要同时给 --req）")
     parser.add_argument("--validate", action="store_true", help="只校验 requirements.yaml，不解析拓扑")
+    parser.add_argument(
+        "--address-table",
+        action="store_true",
+        help="只输出地址与网关表（Markdown），用于生成命令前人工确认；配合 --req，可再给 .topo 补终端地址",
+    )
     parser.add_argument("--ai-config", help="ai.yaml，配合 --ai-input 把要求原文转成 YAML")
     parser.add_argument("--ai-input", help="要求原文文件（.md/.txt），用 AI 转成 YAML")
     parser.add_argument("--ai-out", help="AI 生成的 YAML 路径（默认 requirements.generated.yaml）")
+    parser.add_argument(
+        "--ai-table",
+        action="store_true",
+        help="阶段一：只让 AI 出地址与网关表（Markdown），确认后再生成 YAML",
+    )
+    parser.add_argument(
+        "--ai-table-out",
+        help="阶段一表格输出路径（默认 addresses.generated.md）",
+    )
     parser.add_argument("--scaffold-out", help="生成 groups.yaml 骨架到这个路径（需要 topo）")
     parser.add_argument("--req-text", help="课程要求原文（.md/.txt），用于从原文里认分组")
     parser.add_argument("--build-req", help="把 groups.yaml 展开成 requirements.yaml")
@@ -450,6 +464,26 @@ def _main(argv: list[str] | None = None) -> int:
         from labgen.ai import AiError, convert_requirements, load_ai_config
         from labgen.requirements import RequirementError, load_requirements
 
+        if args.ai_table:
+            from labgen.ai import convert_address_table
+
+            try:
+                ai_config = load_ai_config(args.ai_config)
+                source = Path(args.ai_input).read_text(encoding="utf-8")
+                table_text = convert_address_table(ai_config, source)
+            except (FileNotFoundError, AiError) as exc:
+                print(f"错误：{exc}", file=sys.stderr)
+                return 1
+
+            target = Path(args.ai_table_out or "addresses.generated.md")
+            target.write_text(table_text, encoding="utf-8")
+            print(table_text)
+            print(f"已生成地址表：{target}")
+            print(
+                "下一步：核对网关和 IP，改完用 --ai-input 指向这张表生成 requirements.yaml，再 --validate"
+            )
+            return 0
+
         try:
             ai_config = load_ai_config(args.ai_config)
             source = Path(args.ai_input).read_text(encoding="utf-8")
@@ -485,6 +519,29 @@ def _main(argv: list[str] | None = None) -> int:
         _print_summary(requirements, args.req)
         return 0
 
+    if args.address_table:
+        if not args.req:
+            print("错误：--address-table 需要配合 --req 使用", file=sys.stderr)
+            return 1
+        from labgen.addresses import render_markdown
+        from labgen.requirements import RequirementError, load_requirements
+
+        try:
+            requirements = load_requirements(args.req)
+        except (FileNotFoundError, RequirementError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 1
+
+        checked_topo = None
+        if args.topo:
+            try:
+                checked_topo = parse_topo(args.topo)
+            except (FileNotFoundError, TopoError) as exc:
+                print(f"警告：拓扑读不了，只输出设备地址：{exc}", file=sys.stderr)
+
+        print(render_markdown(checked_topo, requirements))
+        return 0
+
     if not args.topo:
         print("错误：缺少 .topo 文件路径（或用 --validate 只校验要求文件）", file=sys.stderr)
         return 1
@@ -516,9 +573,11 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"已生成：{path}（{len(configs)} 台设备）")
             return 0
 
+        from labgen.pastestyle import to_safe_paste
+
         for name, commands in configs.items():
             print(f"===== {name} =====")
-            print("\n".join(commands))
+            print("\n".join(to_safe_paste(commands)))
             print()
         return 0
 

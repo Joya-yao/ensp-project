@@ -10,6 +10,14 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
+from labgen.addresses import (
+    address_entries,
+    device_rows,
+    network_rows,
+    parse_ip,
+    terminal_rows,
+)
+from labgen.pastestyle import to_safe_paste
 from labgen.requirements import Requirements
 from labgen.topo import Topology
 
@@ -92,6 +100,69 @@ def _link_table(doc: Document, topo: Topology) -> None:
         row[4].text = link.cable
 
 
+def _add_table(doc: Document, headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = "Light Grid Accent 1"
+    for cell, title in zip(table.rows[0].cells, headers):
+        cell.text = title
+    for values in rows:
+        row = table.add_row().cells
+        for cell, value in zip(row, values):
+            cell.text = value
+
+
+def _note(doc: Document, text: str) -> None:
+    paragraph = doc.add_paragraph(text)
+    paragraph.runs[0].font.size = Pt(9)
+
+
+def _address_section(doc: Document, topo: Topology, req: Requirements) -> None:
+    if not address_entries(req):
+        return
+
+    doc.add_heading("地址与网关", level=1)
+    _note(
+        doc,
+        "配置终端和排查三层互通时看这一节。网关取值优先级：VRRP 虚拟 IP → DHCP 地址池 → "
+        "网段内 .254 地址 → 网段内唯一地址；标「本机」表示该设备自己就是网关，标「—」表示"
+        "该网段没有可推断的网关（多为设备互联链路），需要人工确认。"
+    )
+
+    networks = network_rows(req)
+    if networks:
+        doc.add_heading("网段与网关", level=2)
+        _add_table(
+            doc,
+            ("网段", "掩码", "网关", "网关在哪", "该网段设备地址", "终端可用地址"),
+            networks,
+        )
+
+    devices = device_rows(req)
+    if devices:
+        doc.add_heading("每台设备的地址", level=2)
+        _add_table(
+            doc, ("设备", "接口", "IP", "掩码", "VLAN", "网关", "说明"), devices
+        )
+
+    terminals = terminal_rows(topo, req)
+    if terminals:
+        doc.add_heading("终端建议地址", level=2)
+        _note(
+            doc,
+            "按拓扑连线自动推出 PC 挂在哪台交换机的哪个口、属于哪个 VLAN，"
+            "并从该 VLAN 网段里按顺序取第一个空地址。粘之前可改，别跟已有设备撞。",
+        )
+        _add_table(doc, ("终端", "接在", "VLAN", "建议 IP", "掩码", "网关"), terminals)
+
+    layer2 = [
+        name
+        for name, spec in req.devices.items()
+        if not any(parse_ip(iface.ip) for iface in spec.interfaces)
+    ]
+    if layer2:
+        _note(doc, "没有三层地址的设备（二层透传，按接入 VLAN 配终端网关即可）：" + "、".join(layer2))
+
+
 def build_document(
     topo: Topology, req: Requirements, configs: dict[str, list[str]]
 ) -> Document:
@@ -127,6 +198,8 @@ def build_document(
     doc.add_heading("连线", level=2)
     _link_table(doc, topo)
 
+    _address_section(doc, topo, req)
+
     if topo.warnings:
         doc.add_heading("解析告警", level=2)
         for warning in topo.warnings:
@@ -155,7 +228,7 @@ def build_document(
         info.runs[0].font.size = Pt(9)
 
         doc.add_paragraph("把下面整段命令复制到该设备：")
-        _command_block(doc, commands)
+        _command_block(doc, to_safe_paste(commands))
 
         tail = doc.add_paragraph("执行完成后保存配置：save")
         tail.runs[0].font.size = Pt(9)
