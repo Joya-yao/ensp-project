@@ -191,6 +191,19 @@ req.acls              # tuple[AclSpec, ...]
 | `terminal_rows(topo, req)` | PC 接入位置 + 按顺序分配的建议地址 |
 | `render_markdown(topo, req)` | 三张表的 Markdown 文本，给 `--address-table` 用 |
 
+## labgen.excel
+
+地址表 Excel（可选，需要 `openpyxl`）。两页签「设备地址」「终端地址」，用户在 Excel 里改完保存，生成时以它为准。
+
+| 函数 | 作用 |
+| --- | --- |
+| `available()` | 有没有装 openpyxl |
+| `write_address_xlsx(path, topo, req=None)` | 写工作簿；`req=None` 时写 `?` 待填模板 |
+| `read_address_xlsx(path)` | 读回 `{"devices": [...], "terminals": [...]}`，跳过空行 |
+| `apply_overrides(req, sheet)` | 用表里的值覆盖 `Requirements`：设备行改 IP/掩码/VLAN，终端行改所连端口的 access VLAN；空值或 `?` 表示不改 |
+
+覆盖返回的是新的 `Requirements`（`dataclasses.replace`），原始对象不动。
+
 ## labgen.ui
 
 本地网页界面，纯标准库（`http.server`），只监听 `127.0.0.1`。
@@ -207,14 +220,15 @@ HTTP 接口：
 | `/` | GET | 单页界面 |
 | `/api/summary` | POST | 解析拓扑，返回设备与连线概况 |
 | `/api/validate` | POST | 校验 YAML |
-| `/api/address-table` | POST | 有 `yaml` 时按 YAML 出地址表，只有 `topo` 时出 `?` 待填模板；按 `addr_path`（默认 `output/ui/work/<拓扑名>-addresses.md`）写盘，返回 `saved`/`mode`/`stem` |
-| `/api/generate` | POST | 生成 `<拓扑名>-配置文档.docx` 与 `<拓扑名>-<设备>.txt`（超 40 行自动分段），返回文件清单（每项含 `name`/`size`/`path` 绝对路径） |
+| `/api/address-table` | POST | 有 `yaml` 时按 YAML 出表，只有 `topo` 时出 `?` 待填模板；装了 openpyxl 就写 `<拓扑名>-addresses.xlsx`（否则 `.md`），返回 `saved`/`mode`/`stem`/`xlsx` |
+| `/api/generate` | POST | 生成 `<拓扑名>-配置文档.docx` 与 `<拓扑名>-<设备>.txt`（超 40 行自动分段）；若 `addr_path` 指向存在的 xlsx，先用它覆盖 YAML，返回 `overrides` 说明用了哪份表 |
 | `/api/upload` | POST | `{name, data(base64), work_dir}` 把上传的 `.topo` 原始字节写进中间目录 |
 | `/api/save` | POST | `{path, content}` 保存文本文件，只能落在 `output/` 下 |
 | `/api/read` | GET | `?path=` 读取项目目录内的文本文件 |
 | `/api/list` | GET | `?dir=` 列出目录里的 yaml/md/txt/topo |
 | `/api/ai-convert` | POST | `{text, provider, base_url, model, api_key, mode}`，走 `labgen.ai` 出 YAML 或地址表；云端缺 key 直接 400 |
 | `/api/file` | GET | `?path=` 下载 `output/` 下的产物 |
+| `/api/open` | GET | `?path=` 用系统默认程序打开 `output/` 下的产物（Excel / Word / 记事本） |
 
 POST 必须带 `X-Token` 请求头（页面里的 `__TOKEN__` 会被替换成实际值）；`yaml`、`topo`、`work_dir`、`final_dir` 必须是字符串，类型不对返回 400 而不是断开连接。目录参数都会被解析成绝对路径，越出 `output/` 直接拒绝。
 
