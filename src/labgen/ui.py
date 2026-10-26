@@ -15,8 +15,10 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import threading
@@ -26,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from labgen import excel
 from labgen.addresses import render_markdown, render_skeleton
 from labgen.ai import AiConfig, AiError, convert_address_table, convert_requirements
 from labgen.docx_writer import write_docx
@@ -38,6 +41,7 @@ __all__ = ["serve", "make_server"]
 
 MAX_BODY = 8 * 1024 * 1024  # 8 MB：够放一个几 MB 的 .topo 的 base64
 TEXT_SUFFIXES = {".yaml", ".yml", ".md", ".txt", ".json", ".topo"}
+WRITE_SUFFIXES = TEXT_SUFFIXES | {".xlsx"}
 SAFE_NAME = re.compile(r"[^\w.\-]+", re.UNICODE)
 
 
@@ -99,6 +103,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/file":
             self._download(query)
+            return
+        if parsed.path == "/api/open":
+            self._open_file(query)
             return
         if parsed.path == "/api/read":
             self._read_file(query)
@@ -166,8 +173,8 @@ class Handler(BaseHTTPRequestHandler):
         resolved = candidate.resolve()
         if not self._inside(resolved, self._output_dir()):
             raise ValueError("只能写到项目的 output/ 目录下，例：output/ui/work/addresses.md")
-        if resolved.suffix.lower() not in TEXT_SUFFIXES:
-            raise ValueError(f"只允许写这些类型：{'、'.join(sorted(TEXT_SUFFIXES))}")
+        if resolved.suffix.lower() not in WRITE_SUFFIXES:
+            raise ValueError(f"只允许写这些类型：{'、'.join(sorted(WRITE_SUFFIXES))}")
         return resolved
 
     # ---------- 业务 ----------
@@ -236,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             except (FileNotFoundError, TopoError) as exc:
                 return _error(HTTPStatus.BAD_REQUEST, str(exc))
 
+        req = None
         if yaml_text:
             try:
                 req = self._load_req(yaml_text)
@@ -250,28 +258,64 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("要么选一个 .topo（生成待填表），要么贴 YAML（生成真实地址表）")
 
         stem = project_stem(topo_path)
-        target = self._write_path(
-            _text(payload, "addr_path", "地址表路径"),
-            f"output/ui/work/{stem}-addresses.md",
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(markdown, encoding="utf-8", newline="")
+        saved_text = ""
+        xlsx_path: Path | None = None
+
+        if topo is not None and excel.available():
+            target = self._write_path(
+                _text(payload, "addr_path", "地址表路径"),
+                f"output/ui/work/{stem}-addresses.xlsx",
+            )
+            if target.suffix.lower() != ".xlsx":
+                target = target.with_suffix(".xlsx")
+            excel.write_address_xlsx(target, topo, req if yaml_text else None)
+            xlsx_path = target
+            saved_text = str(target)
+        else:
+            target = self._write_path(
+                _text(payload, "addr_path", "地址表路径"),
+                f"output/ui/work/{stem}-addresses.md",
+            )
+            if target.suffix.lower() == ".xlsx":
+                target = target.with_suffix(".md")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(markdown, encoding="utf-8", newline="")
+            saved_text = str(target)
 
         return HTTPStatus.OK, {
             "ok": True,
             "markdown": markdown,
-            "saved": str(target),
-            "name": target.name,
+            "saved": saved_text,
+            "name": Path(saved_text).name,
             "mode": mode,
             "stem": stem,
+            "xlsx": xlsx_path is not None,
         }
 
     def _handle_generate(self, payload: dict) -> tuple[int, dict]:
+        stem_for_path = ""
         try:
             yaml_text = self._yaml_text(payload)
             topo_path = self._topo_path(payload)
+            stem_for_path = project_stem(topo_path)
             req = self._load_req(yaml_text)
             topo = parse_topo(topo_path)
+
+            # 地址表 xlsx 存在就以它为准（用户在 Excel 里改过的地址/VLAN 覆盖 YAML）
+            applied = None
+            if excel.available():
+                addr_path = _text(payload, "addr_path", "地址表路径")
+                candidate = Path(addr_path) if addr_path else (
+                    self._work_dir() / f"{stem_for_path}-addresses.xlsx"
+                )
+                if not candidate.is_absolute():
+                    candidate = self.root / candidate
+                candidate = candidate.resolve()
+                if candidate.suffix.lower() == ".xlsx" and candidate.is_file():
+                    sheet = excel.read_address_xlsx(candidate)
+                    req = excel.apply_overrides(req, sheet)
+                    applied = str(candidate)
+
             configs = build_configs(topo, req)
         except (FileNotFoundError, TopoError, RequirementError) as exc:
             return _error(HTTPStatus.BAD_REQUEST, str(exc))
@@ -317,6 +361,7 @@ class Handler(BaseHTTPRequestHandler):
             "files": files,
             "devices": len(configs),
             "stem": stem,
+            "overrides": applied,
         }
 
     def _handle_upload(self, payload: dict) -> tuple[int, dict]:
@@ -432,6 +477,35 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             files.append({"name": item.name, "size": item.stat().st_size, "path": str(item)})
         self._send_json(HTTPStatus.OK, {"ok": True, "dir": str(base), "files": files})
+
+    def _open_file(self, query) -> None:
+        """用系统默认程序打开产物（Excel / Word / 记事本）。"""
+
+        raw = (query.get("path") or [""])[0]
+        if not raw:
+            self._send_json(*_error(HTTPStatus.BAD_REQUEST, "缺少 path"))
+            return
+        target = Path(raw)
+        if not target.is_absolute():
+            target = self.root / target
+        target = target.resolve()
+        if not self._inside(target, self._output_dir()):
+            self._send_json(*_error(HTTPStatus.FORBIDDEN, "只能打开 output 目录里的文件"))
+            return
+        if not target.is_file():
+            self._send_json(*_error(HTTPStatus.NOT_FOUND, "文件不存在"))
+            return
+
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            else:  # macOS / Linux
+                opener = "open" if sys.platform == "darwin" else "xdg-open"
+                subprocess.Popen([opener, str(target)])  # noqa: S603
+        except OSError as exc:
+            self._send_json(*_error(HTTPStatus.BAD_REQUEST, f"打不开文件：{exc}"))
+            return
+        self._send_json(HTTPStatus.OK, {"ok": True, "path": str(target)})
 
     def _download(self, query) -> None:
         raw = (query.get("path") or [""])[0]
@@ -614,11 +688,11 @@ PAGE = """<!doctype html>
     </div>
     <div class="hint" id="yaml-hint"></div>
 
-    <label>地址表（可编辑，改完点保存）</label>
-    <textarea id="addr" placeholder="点右边「地址表」生成，生成结果会填在这里"></textarea>
+    <label>地址表（Excel，改完保存即可，生成时以它为准）</label>
+    <textarea id="addr" placeholder="点右边「地址表」生成 Excel，预览会显示在这里"></textarea>
     <div class="row">
-      <input id="addr-path" value="output/ui/work/addresses.md" style="flex:1 1 260px">
-      <button id="btn-save-addr" class="ghost">保存地址表</button>
+      <input id="addr-path" value="output/ui/work/项目-addresses.xlsx" style="flex:1 1 260px">
+      <button id="btn-open-addr" class="ghost">用 Excel 打开</button>
     </div>
     <div class="hint" id="addr-hint"></div>
 
@@ -712,7 +786,7 @@ function syncNames() {
   const stem = stemOf();
   if (!stem) return;
   $("save-name").value = stem + "-requirements.yaml";
-  $("addr-path").value = "output/ui/work/" + stem + "-addresses.md";
+  $("addr-path").value = "output/ui/work/" + stem + "-addresses.xlsx";
 }
 
 $("topo").addEventListener("change", syncNames);
@@ -720,15 +794,25 @@ $("topo").addEventListener("blur", syncNames);
 
 function addArtifacts(items) {
   const html = items.map(it => {
-    const link = it.download === false ? "" :
-      `<a href="/api/file?path=${encodeURIComponent(it.path)}">下载</a>`;
+    const open = `/api/open?path=${encodeURIComponent(it.path)}`;
+    const download = `/api/file?path=${encodeURIComponent(it.path)}`;
     return `<li>
       <div class="line"><span>${it.name}</span><span class="muted">${it.size} B</span></div>
       <span class="path">${it.path}</span>
-      <div class="line"><span></span><span>${link}</span></div>
+      <div class="line"><span></span><span>
+        <a href="${open}" target="_blank">打开</a> ·
+        <a href="${download}">下载</a>
+      </span></div>
     </li>`;
   }).join("");
   $("artifacts").innerHTML = html + $("artifacts").innerHTML;
+}
+
+function openPath(path, label) {
+  fetch("/api/open?path=" + encodeURIComponent(path))
+    .then(r => r.json())
+    .then(r => { if (!r.ok) show(r.error, "bad"); else show("已用默认程序打开：" + (label || path), "ok"); })
+    .catch(e => show("打开失败：" + e, "bad"));
 }
 
 async function uploadIfNeeded() {
@@ -770,17 +854,7 @@ $("btn-save").onclick = async () => {
   } finally { setBusy(false); }
 };
 
-$("btn-save-addr").onclick = async () => {
-  setBusy(true);
-  try {
-    const r = await call("/api/save", {path: $("addr-path").value, content: $("addr").value});
-    if (!r.ok) return show(r.error, "bad");
-    $("addr-hint").textContent = "已保存：" + r.path;
-    show("地址表已保存到 " + r.path, "ok");
-    addArtifacts([{name: r.name, size: r.size, path: r.path, download: false}]);
-    loadWork();
-  } finally { setBusy(false); }
-};
+$("btn-open-addr").onclick = () => openPath($("addr-path").value, "地址表");
 
 async function loadWork() {
   const dir = encodeURIComponent($("work-dir").value || "output/ui/work");
@@ -833,10 +907,11 @@ $("btn-addr").onclick = async () => {
     $("addr-path").value = r.saved;
     $("addr-hint").textContent = (r.mode === "skeleton" ? "已按拓扑生成待填表：" : "已按 YAML 生成地址表：") + r.saved;
     show(r.markdown + "\\n\\n—— 已保存到：\\n" + r.saved +
-      "\\n" + (r.mode === "skeleton"
-        ? "（这是按拓扑生成的待填表，把 ? 改成实际地址后点「保存地址表」）"
-        : "（可在上方文本框修改后点「保存地址表」）"));
-    addArtifacts([{name: r.name, size: r.markdown.length, path: r.saved, download: true}]);
+      (r.xlsx
+        ? "\\n（Excel 会打开它：改完保存，再点「生成配置」，生成时以 Excel 为准）"
+        : "\\n（没装 openpyxl，只能出 Markdown）"));
+    addArtifacts([{name: r.name, size: r.markdown.length, path: r.saved}]);
+    if (r.xlsx) openPath(r.saved, "地址表 Excel");
     loadWork();
   } finally { setBusy(false); }
 };
@@ -847,7 +922,9 @@ $("btn-gen").onclick = async () => {
     if (!(await uploadIfNeeded())) return;
     const r = await call("/api/generate", body());
     if (!r.ok) return show(r.error, "bad");
-    show(`生成完成：${r.devices} 台设备\\n前缀：${r.stem}\\n最终目录：${r.final_dir}\\n共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
+    show(`生成完成：${r.devices} 台设备\\n前缀：${r.stem}\\n最终目录：${r.final_dir}\\n` +
+      (r.overrides ? `地址表覆盖自：${r.overrides}\\n` : "未使用地址表覆盖（没有 xlsx 时按 YAML）\\n") +
+      `共 ${r.files.length} 个文件（见下方列表，含完整路径）`, "ok");
     addArtifacts(r.files);
   } finally { setBusy(false); }
 };

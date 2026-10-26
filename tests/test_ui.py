@@ -118,10 +118,10 @@ def test_address_table_saves_markdown_to_work(server, tmp_path):
     assert "## 网段与网关" in data["markdown"]
     # 文件名带拓扑前缀，便于多项目区分
     assert data["stem"] == "lab01"
-    assert data["name"] == "lab01-addresses.md"
-    saved = tmp_path / "output" / "ui" / "work" / "lab01-addresses.md"
+    suffix = ".xlsx" if data["xlsx"] else ".md"
+    assert data["name"] == f"lab01-addresses{suffix}"
+    saved = tmp_path / "output" / "ui" / "work" / f"lab01-addresses{suffix}"
     assert saved.is_file()
-    assert "10.10.0.254" in saved.read_text(encoding="utf-8")
     assert data["saved"] == str(saved.resolve())
     assert data["mode"] == "yaml"
 
@@ -137,7 +137,8 @@ def test_address_table_skeleton_without_yaml(server, tmp_path):
     assert data["mode"] == "skeleton"
     assert "待填写" in data["markdown"]
     assert "| LSW1 |" in data["markdown"]
-    assert (tmp_path / "output" / "ui" / "work" / "lab01-addresses.md").is_file()
+    suffix = ".xlsx" if data["xlsx"] else ".md"
+    assert (tmp_path / "output" / "ui" / "work" / f"lab01-addresses{suffix}").is_file()
 
 
 def test_address_table_requires_topo_or_yaml(server):
@@ -302,6 +303,49 @@ def test_ai_rejects_unknown_mode(server):
     assert "mode" in data["error"]
 
 
+def test_generate_applies_address_xlsx_overrides(server, tmp_path):
+    from labgen.excel import available
+
+    if not available():
+        pytest.skip("没装 openpyxl")
+
+    from openpyxl import load_workbook
+
+    srv, url = server
+    status, data = _post(
+        url,
+        "/api/address-table",
+        {"yaml": _yaml(), "topo": str(LAB / "lab01.topo"), "addr_path": "output/ui/work/lab01-addresses.xlsx"},
+    )
+    assert data["xlsx"] is True, data
+
+    book = load_workbook(data["saved"])
+    sheet = book["设备地址"]
+    for row in sheet.iter_rows(min_row=2):
+        if row[1].value == "Vlanif10":
+            row[2].value = "10.10.0.99"
+            row[3].value = "255.255.255.0"
+    book.save(data["saved"])
+
+    status, gen = _post(
+        url,
+        "/api/generate",
+        {
+            "yaml": _yaml(),
+            "topo": str(LAB / "lab01.topo"),
+            "final_dir": "output/ui/final",
+            "addr_path": data["saved"],
+        },
+    )
+    assert gen["ok"] is True, gen
+    assert gen["overrides"] == data["saved"]
+
+    text = "\n".join(
+        p.read_bytes().decode("utf-8") for p in (tmp_path / "output" / "ui" / "final").glob("*.txt")
+    )
+    assert "ip address 10.10.0.99 255.255.255.0" in text
+
+
 def test_download_rejects_path_outside_output(server):
     srv, url = server
     with pytest.raises(urllib.error.HTTPError) as exc:
@@ -310,3 +354,17 @@ def test_download_rejects_path_outside_output(server):
             timeout=5,
         )
     assert exc.value.code == 403
+
+
+def test_open_rejects_path_outside_output(server):
+    srv, url = server
+    status, data = _get(url, "/api/open?path=" + quote(str(LAB / "lab01.topo"), safe=""))
+    assert status == 403
+    assert data["ok"] is False
+
+
+def test_open_missing_file_returns_404(server, tmp_path):
+    srv, url = server
+    missing = tmp_path / "output" / "ui" / "final" / "nope.txt"
+    status, data = _get(url, "/api/open?path=" + quote(str(missing), safe=""))
+    assert status == 404
